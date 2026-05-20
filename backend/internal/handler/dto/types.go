@@ -452,6 +452,9 @@ type AdminUsageLog struct {
 	// IPAddress 用户请求 IP（仅管理员可见）
 	IPAddress *string `json:"ip_address,omitempty"`
 
+	// RequestBody 完整请求体（仅管理员可见）
+	RequestBody *string `json:"request_body,omitempty"`
+
 	// Account 最小账号信息（避免泄露敏感字段）
 	Account *AccountSummary `json:"account,omitempty"`
 }

@@ -183,10 +183,63 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
+        <template #cell-request_body="{ row }">
+          <button
+            v-if="row.request_body"
+            type="button"
+            class="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-primary-600 transition-colors hover:bg-primary-50 hover:text-primary-700 dark:text-primary-400 dark:hover:bg-primary-900/30 dark:hover:text-primary-300"
+            :title="t('admin.usage.requestBody.view')"
+            @click="openRequestBody(row)"
+          >
+            <Icon name="document" size="xs" />
+            <span>{{ t('admin.usage.requestBody.view') }}</span>
+          </button>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
         <template #empty><EmptyState :message="t('usage.noRecords')" /></template>
       </DataTable>
     </div>
   </div>
+
+  <BaseDialog
+    :show="requestBodyDialogVisible"
+    :title="t('admin.usage.requestBody.title')"
+    width="full"
+    @close="closeRequestBody"
+  >
+    <div class="space-y-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="min-w-0 text-xs text-gray-500 dark:text-gray-400">
+          <span class="font-medium text-gray-700 dark:text-gray-300">{{ t('admin.usage.requestId') }}:</span>
+          <span class="ml-1 font-mono">{{ selectedRequestBodyRow?.request_id || '-' }}</span>
+        </div>
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm"
+          :disabled="!selectedRequestBodyText"
+          @click="copyRequestBody"
+        >
+          <Icon name="copy" size="xs" />
+          <span>{{ t('common.copy') }}</span>
+        </button>
+      </div>
+
+      <div v-if="selectedRequestBodyParsed.ok" class="overflow-hidden rounded border border-gray-200 bg-white dark:border-dark-600 dark:bg-dark-800">
+        <JsonEditorVue
+          ref="requestBodyEditorRef"
+          :model-value="selectedRequestBodyParsed.value"
+          :mode="jsonEditorMode"
+          :read-only="true"
+          class="h-[70vh]"
+        />
+      </div>
+      <pre
+        v-else
+        class="max-h-[70vh] overflow-auto rounded border border-gray-200 bg-gray-50 p-3 text-xs text-gray-800 dark:border-dark-600 dark:bg-dark-900 dark:text-gray-100"
+      >{{ selectedRequestBodyText || t('admin.usage.requestBody.empty') }}</pre>
+    </div>
+  </BaseDialog>
 
   <!-- Token Tooltip Portal -->
   <Teleport to="body">
@@ -377,7 +430,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatDateTime, formatReasoningEffort } from '@/utils/format'
 import { formatCacheTokens, formatMultiplier } from '@/utils/formatters'
@@ -392,6 +445,8 @@ import {
   formatImageSizeBreakdown,
   formatImageSizeSource,
 } from '@/utils/imageUsage'
+import JsonEditorVue from 'json-editor-vue'
+import { Mode } from 'vanilla-jsoneditor'
 
 /** Compute the account-billed cost for display: (account_stats_cost ?? total_cost) * rate_multiplier */
 function accountBilled(row: { total_cost?: number | null; account_stats_cost?: number | null; account_rate_multiplier?: number | null }): number {
@@ -420,7 +475,9 @@ function getDisplayBillingMode(row: Pick<AdminUsageLog, 'billing_mode' | 'image_
 
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { useClipboard } from '@/composables/useClipboard'
 import type { AdminUsageLog } from '@/types'
 import type { Column } from '@/components/common/types'
 
@@ -444,6 +501,7 @@ defineEmits<{
   sort: [key: string, order: 'asc' | 'desc']
 }>()
 const { t } = useI18n()
+const { copyToClipboard } = useClipboard()
 
 // Tooltip state - cost
 const tooltipVisible = ref(false)
@@ -454,6 +512,13 @@ const tooltipData = ref<AdminUsageLog | null>(null)
 const tokenTooltipVisible = ref(false)
 const tokenTooltipPosition = ref({ x: 0, y: 0 })
 const tokenTooltipData = ref<AdminUsageLog | null>(null)
+
+const requestBodyDialogVisible = ref(false)
+const selectedRequestBodyRow = ref<AdminUsageLog | null>(null)
+const selectedRequestBodyText = ref('')
+const selectedRequestBodyParsed = ref<{ ok: true; value: unknown } | { ok: false }>({ ok: false })
+const jsonEditorMode = Mode.tree
+const requestBodyEditorRef = ref<unknown>(null)
 
 const getRequestTypeLabel = (row: AdminUsageLog): string => {
   const requestType = resolveUsageRequestType(row)
@@ -469,6 +534,63 @@ const getRequestTypeBadgeClass = (row: AdminUsageLog): string => {
   if (requestType === 'stream') return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
   if (requestType === 'sync') return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
   return 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'
+}
+
+const parseRequestBody = (body: string): { ok: true; value: unknown } | { ok: false } => {
+  try {
+    return { ok: true, value: JSON.parse(body) }
+  } catch {
+    return { ok: false }
+  }
+}
+
+type JsonEditorInstance = {
+  expand?: (path: Array<string | number>, callback?: () => boolean) => void
+}
+
+const getJsonEditorInstance = (value: unknown): JsonEditorInstance | null => {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const candidates = [
+    record.jsonEditor,
+    record.editor,
+    typeof record.getEditor === 'function' ? record.getEditor() : null,
+    value
+  ]
+  return candidates.find((candidate): candidate is JsonEditorInstance =>
+    !!candidate &&
+    typeof candidate === 'object' &&
+    typeof (candidate as JsonEditorInstance).expand === 'function'
+  ) || null
+}
+
+const expandRequestBodyJson = async () => {
+  await nextTick()
+  window.setTimeout(() => {
+    getJsonEditorInstance(requestBodyEditorRef.value)?.expand?.([], () => true)
+  }, 0)
+}
+
+const openRequestBody = (row: AdminUsageLog) => {
+  const body = row.request_body || ''
+  selectedRequestBodyRow.value = row
+  selectedRequestBodyText.value = body
+  selectedRequestBodyParsed.value = parseRequestBody(body)
+  requestBodyDialogVisible.value = true
+  if (selectedRequestBodyParsed.value.ok) {
+    void expandRequestBodyJson()
+  }
+}
+
+const closeRequestBody = () => {
+  requestBodyDialogVisible.value = false
+  selectedRequestBodyRow.value = null
+  selectedRequestBodyText.value = ''
+  selectedRequestBodyParsed.value = { ok: false }
+}
+
+const copyRequestBody = () => {
+  copyToClipboard(selectedRequestBodyText.value)
 }
 
 

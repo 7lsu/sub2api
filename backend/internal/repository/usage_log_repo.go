@@ -29,14 +29,14 @@ import (
 )
 
 const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, image_count, image_size, image_input_size, image_output_size, image_size_source, image_size_breakdown, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, created_at"
+const adminUsageLogSelectColumns = usageLogSelectColumns + ", request_body"
 
 // usageLogInsertArgTypes must stay in the same order as:
 //  1. prepareUsageLogInsert().args
 //  2. every INSERT/CTE VALUES column list in this file
 //  3. execUsageLogInsertNoResult placeholder positions
-//  4. scanUsageLog selected column order (via usageLogSelectColumns)
 //
-// When adding a usage_logs column, update all of those call sites together.
+// Normal SELECT/scan paths use usageLogSelectColumns and do not load request_body.
 var usageLogInsertArgTypes = [...]string{
 	"bigint",      // user_id
 	"bigint",      // api_key_id
@@ -81,6 +81,7 @@ var usageLogInsertArgTypes = [...]string{
 	"text",        // reasoning_effort
 	"text",        // inbound_endpoint
 	"text",        // upstream_endpoint
+	"text",        // request_body
 	"boolean",     // cache_ttl_overridden
 	"bigint",      // channel_id
 	"text",        // model_mapping_chain
@@ -398,6 +399,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			reasoning_effort,
 			inbound_endpoint,
 			upstream_endpoint,
+			request_body,
 			cache_ttl_overridden,
 			channel_id,
 			model_mapping_chain,
@@ -411,7 +413,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING id, created_at
@@ -840,6 +842,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			reasoning_effort,
 			inbound_endpoint,
 			upstream_endpoint,
+			request_body,
 			cache_ttl_overridden,
 			channel_id,
 			model_mapping_chain,
@@ -849,7 +852,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			created_at
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(keys)*50)
+	args := make([]any, 0, len(keys)*51)
 	argPos := 1
 	for idx, key := range keys {
 		if idx > 0 {
@@ -921,6 +924,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				reasoning_effort,
 				inbound_endpoint,
 				upstream_endpoint,
+				request_body,
 				cache_ttl_overridden,
 				channel_id,
 				model_mapping_chain,
@@ -973,6 +977,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				reasoning_effort,
 				inbound_endpoint,
 				upstream_endpoint,
+				request_body,
 				cache_ttl_overridden,
 				channel_id,
 				model_mapping_chain,
@@ -1065,6 +1070,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			reasoning_effort,
 			inbound_endpoint,
 			upstream_endpoint,
+			request_body,
 			cache_ttl_overridden,
 			channel_id,
 			model_mapping_chain,
@@ -1074,7 +1080,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			created_at
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(preparedList)*50)
+	args := make([]any, 0, len(preparedList)*51)
 	argPos := 1
 	for idx, prepared := range preparedList {
 		if idx > 0 {
@@ -1143,6 +1149,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			reasoning_effort,
 			inbound_endpoint,
 			upstream_endpoint,
+			request_body,
 			cache_ttl_overridden,
 			channel_id,
 			model_mapping_chain,
@@ -1195,6 +1202,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			reasoning_effort,
 			inbound_endpoint,
 			upstream_endpoint,
+			request_body,
 			cache_ttl_overridden,
 			channel_id,
 			model_mapping_chain,
@@ -1255,6 +1263,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			reasoning_effort,
 			inbound_endpoint,
 			upstream_endpoint,
+			request_body,
 			cache_ttl_overridden,
 			channel_id,
 			model_mapping_chain,
@@ -1268,7 +1277,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`, prepared.args...)
@@ -1303,6 +1312,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	reasoningEffort := nullString(log.ReasoningEffort)
 	inboundEndpoint := nullString(log.InboundEndpoint)
 	upstreamEndpoint := nullString(log.UpstreamEndpoint)
+	requestBody := nullString(log.RequestBody)
 	channelID := nullInt64(log.ChannelID)
 	modelMappingChain := nullString(log.ModelMappingChain)
 	billingTier := nullString(log.BillingTier)
@@ -1367,6 +1377,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			reasoningEffort,
 			inboundEndpoint,
 			upstreamEndpoint,
+			requestBody,
 			log.CacheTTLOverridden,
 			channelID,
 			modelMappingChain,
@@ -1431,11 +1442,11 @@ func (r *usageLogRepository) GetByID(ctx context.Context, id int64) (log *servic
 }
 
 func (r *usageLogRepository) ListByUser(ctx context.Context, userID int64, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
-	return r.listUsageLogsWithPagination(ctx, "WHERE user_id = $1", []any{userID}, params)
+	return r.listUsageLogsWithPagination(ctx, "WHERE user_id = $1", []any{userID}, params, false)
 }
 
 func (r *usageLogRepository) ListByAPIKey(ctx context.Context, apiKeyID int64, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
-	return r.listUsageLogsWithPagination(ctx, "WHERE api_key_id = $1", []any{apiKeyID}, params)
+	return r.listUsageLogsWithPagination(ctx, "WHERE api_key_id = $1", []any{apiKeyID}, params, false)
 }
 
 // UserStats 用户使用统计
@@ -1776,12 +1787,12 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 }
 
 func (r *usageLogRepository) ListByAccount(ctx context.Context, accountID int64, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
-	return r.listUsageLogsWithPagination(ctx, "WHERE account_id = $1", []any{accountID}, params)
+	return r.listUsageLogsWithPagination(ctx, "WHERE account_id = $1", []any{accountID}, params, false)
 }
 
 func (r *usageLogRepository) ListByUserAndTimeRange(ctx context.Context, userID int64, startTime, endTime time.Time) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE user_id = $1 AND created_at >= $2 AND created_at < $3 ORDER BY id DESC LIMIT 10000"
-	logs, err := r.queryUsageLogs(ctx, query, userID, startTime, endTime)
+	logs, err := r.queryUsageLogs(ctx, false, query, userID, startTime, endTime)
 	return logs, nil, err
 }
 
@@ -2027,19 +2038,19 @@ func resolveUsageStatsTimezone() string {
 
 func (r *usageLogRepository) ListByAPIKeyAndTimeRange(ctx context.Context, apiKeyID int64, startTime, endTime time.Time) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE api_key_id = $1 AND created_at >= $2 AND created_at < $3 ORDER BY id DESC LIMIT 10000"
-	logs, err := r.queryUsageLogs(ctx, query, apiKeyID, startTime, endTime)
+	logs, err := r.queryUsageLogs(ctx, false, query, apiKeyID, startTime, endTime)
 	return logs, nil, err
 }
 
 func (r *usageLogRepository) ListByAccountAndTimeRange(ctx context.Context, accountID int64, startTime, endTime time.Time) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE account_id = $1 AND created_at >= $2 AND created_at < $3 ORDER BY id DESC LIMIT 10000"
-	logs, err := r.queryUsageLogs(ctx, query, accountID, startTime, endTime)
+	logs, err := r.queryUsageLogs(ctx, false, query, accountID, startTime, endTime)
 	return logs, nil, err
 }
 
 func (r *usageLogRepository) ListByModelAndTimeRange(ctx context.Context, modelName string, startTime, endTime time.Time) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	query := fmt.Sprintf("SELECT %s FROM usage_logs WHERE %s = $1 AND created_at >= $2 AND created_at < $3 ORDER BY id DESC LIMIT 10000", usageLogSelectColumns, rawUsageLogModelColumn)
-	logs, err := r.queryUsageLogs(ctx, query, modelName, startTime, endTime)
+	logs, err := r.queryUsageLogs(ctx, false, query, modelName, startTime, endTime)
 	return logs, nil, err
 }
 
@@ -2769,6 +2780,14 @@ type UsageLogFilters = usagestats.UsageLogFilters
 
 // ListWithFilters lists usage logs with optional filters (for admin)
 func (r *usageLogRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, filters UsageLogFilters) ([]service.UsageLog, *pagination.PaginationResult, error) {
+	return r.listWithFilters(ctx, params, filters, false)
+}
+
+func (r *usageLogRepository) ListWithFiltersForAdmin(ctx context.Context, params pagination.PaginationParams, filters UsageLogFilters) ([]service.UsageLog, *pagination.PaginationResult, error) {
+	return r.listWithFilters(ctx, params, filters, true)
+}
+
+func (r *usageLogRepository) listWithFilters(ctx context.Context, params pagination.PaginationParams, filters UsageLogFilters, includeRequestBody bool) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	conditions := make([]string, 0, 9)
 	args := make([]any, 0, 9)
 
@@ -2811,9 +2830,9 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 		err  error
 	)
 	if shouldUseFastUsageLogTotal(filters) {
-		logs, page, err = r.listUsageLogsWithFastPagination(ctx, whereClause, args, params)
+		logs, page, err = r.listUsageLogsWithFastPagination(ctx, whereClause, args, params, includeRequestBody)
 	} else {
-		logs, page, err = r.listUsageLogsWithPagination(ctx, whereClause, args, params)
+		logs, page, err = r.listUsageLogsWithPagination(ctx, whereClause, args, params, includeRequestBody)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -3930,7 +3949,7 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 	return resp, nil
 }
 
-func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
+func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams, includeRequestBody bool) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	countQuery := "SELECT COUNT(*) FROM usage_logs " + whereClause
 	var total int64
 	if err := scanSingleRow(ctx, r.sql, countQuery, args, &total); err != nil {
@@ -3940,24 +3959,24 @@ func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, wh
 	limitPos := len(args) + 1
 	offsetPos := len(args) + 2
 	listArgs := append(append([]any{}, args...), params.Limit(), params.Offset())
-	query := fmt.Sprintf("SELECT %s FROM usage_logs %s ORDER BY %s LIMIT $%d OFFSET $%d", usageLogSelectColumns, whereClause, usageLogOrderBy(params), limitPos, offsetPos)
-	logs, err := r.queryUsageLogs(ctx, query, listArgs...)
+	query := fmt.Sprintf("SELECT %s FROM usage_logs %s ORDER BY %s LIMIT $%d OFFSET $%d", usageLogColumns(includeRequestBody), whereClause, usageLogOrderBy(params), limitPos, offsetPos)
+	logs, err := r.queryUsageLogs(ctx, includeRequestBody, query, listArgs...)
 	if err != nil {
 		return nil, nil, err
 	}
 	return logs, paginationResultFromTotal(total, params), nil
 }
 
-func (r *usageLogRepository) listUsageLogsWithFastPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
+func (r *usageLogRepository) listUsageLogsWithFastPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams, includeRequestBody bool) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	limit := params.Limit()
 	offset := params.Offset()
 
 	limitPos := len(args) + 1
 	offsetPos := len(args) + 2
 	listArgs := append(append([]any{}, args...), limit+1, offset)
-	query := fmt.Sprintf("SELECT %s FROM usage_logs %s ORDER BY %s LIMIT $%d OFFSET $%d", usageLogSelectColumns, whereClause, usageLogOrderBy(params), limitPos, offsetPos)
+	query := fmt.Sprintf("SELECT %s FROM usage_logs %s ORDER BY %s LIMIT $%d OFFSET $%d", usageLogColumns(includeRequestBody), whereClause, usageLogOrderBy(params), limitPos, offsetPos)
 
-	logs, err := r.queryUsageLogs(ctx, query, listArgs...)
+	logs, err := r.queryUsageLogs(ctx, includeRequestBody, query, listArgs...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -3997,7 +4016,14 @@ func usageLogOrderBy(params pagination.PaginationParams) string {
 	return fmt.Sprintf("%s %s, id %s", column, sortOrder, sortOrder)
 }
 
-func (r *usageLogRepository) queryUsageLogs(ctx context.Context, query string, args ...any) (logs []service.UsageLog, err error) {
+func usageLogColumns(includeRequestBody bool) string {
+	if includeRequestBody {
+		return adminUsageLogSelectColumns
+	}
+	return usageLogSelectColumns
+}
+
+func (r *usageLogRepository) queryUsageLogs(ctx context.Context, includeRequestBody bool, query string, args ...any) (logs []service.UsageLog, err error) {
 	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -4014,7 +4040,7 @@ func (r *usageLogRepository) queryUsageLogs(ctx context.Context, query string, a
 	logs = make([]service.UsageLog, 0)
 	for rows.Next() {
 		var log *service.UsageLog
-		log, err = scanUsageLog(rows)
+		log, err = scanUsageLogWithRequestBody(rows, includeRequestBody)
 		if err != nil {
 			return nil, err
 		}
@@ -4192,6 +4218,10 @@ func (r *usageLogRepository) loadSubscriptions(ctx context.Context, ids []int64)
 }
 
 func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, error) {
+	return scanUsageLogWithRequestBody(scanner, false)
+}
+
+func scanUsageLogWithRequestBody(scanner interface{ Scan(...any) error }, includeRequestBody bool) (*service.UsageLog, error) {
 	var (
 		id                    int64
 		userID                int64
@@ -4244,9 +4274,10 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		billingMode           sql.NullString
 		accountStatsCost      sql.NullFloat64
 		createdAt             time.Time
+		requestBody           sql.NullString
 	)
 
-	if err := scanner.Scan(
+	dest := []any{
 		&id,
 		&userID,
 		&apiKeyID,
@@ -4298,7 +4329,12 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		&billingMode,
 		&accountStatsCost,
 		&createdAt,
-	); err != nil {
+	}
+	if includeRequestBody {
+		dest = append(dest, &requestBody)
+	}
+
+	if err := scanner.Scan(dest...); err != nil {
 		return nil, err
 	}
 
@@ -4405,6 +4441,9 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 	}
 	if accountStatsCost.Valid {
 		log.AccountStatsCost = &accountStatsCost.Float64
+	}
+	if requestBody.Valid {
+		log.RequestBody = &requestBody.String
 	}
 
 	return log, nil

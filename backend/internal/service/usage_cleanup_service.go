@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,7 +21,11 @@ import (
 )
 
 const (
-	usageCleanupWorkerName = "usage_cleanup_worker"
+	usageCleanupWorkerName               = "usage_cleanup_worker"
+	usageRequestBodyCleanupWorkerName    = "usage_request_body_cleanup_worker"
+	usageRequestBodyRetentionDaysEnv     = "USAGE_REQUEST_BODY_RETENTION_DAYS"
+	defaultUsageRequestBodyRetentionDays = 14
+	usageRequestBodyCleanupInterval      = time.Hour
 )
 
 // UsageCleanupService 负责创建与执行使用记录清理任务
@@ -29,9 +35,10 @@ type UsageCleanupService struct {
 	dashboard   *DashboardAggregationService
 	cfg         *config.Config
 
-	running   int32
-	startOnce sync.Once
-	stopOnce  sync.Once
+	running            int32
+	requestBodyRunning int32
+	startOnce          sync.Once
+	stopOnce           sync.Once
 
 	workerCtx    context.Context
 	workerCancel context.CancelFunc
@@ -95,8 +102,10 @@ func (s *UsageCleanupService) Start() {
 
 	interval := s.workerInterval()
 	s.startOnce.Do(func() {
+		retentionDays := usageRequestBodyRetentionDays()
 		s.timingWheel.ScheduleRecurring(usageCleanupWorkerName, interval, s.runOnce)
-		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] started (interval=%s max_range_days=%d batch_size=%d task_timeout=%s)", interval, s.maxRangeDays(), s.batchSize(), s.taskTimeout())
+		s.timingWheel.ScheduleRecurring(usageRequestBodyCleanupWorkerName, usageRequestBodyCleanupInterval, s.runRequestBodyCleanup)
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] started (interval=%s max_range_days=%d batch_size=%d task_timeout=%s request_body_retention_days=%d request_body_interval=%s)", interval, s.maxRangeDays(), s.batchSize(), s.taskTimeout(), retentionDays, usageRequestBodyCleanupInterval)
 	})
 }
 
@@ -110,6 +119,7 @@ func (s *UsageCleanupService) Stop() {
 		}
 		if s.timingWheel != nil {
 			s.timingWheel.Cancel(usageCleanupWorkerName)
+			s.timingWheel.Cancel(usageRequestBodyCleanupWorkerName)
 		}
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] stopped")
 	})
@@ -184,6 +194,73 @@ func (s *UsageCleanupService) runOnce() {
 
 	logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task claimed: task=%d status=%s created_by=%d deleted_rows=%d %s", task.ID, task.Status, task.CreatedBy, task.DeletedRows, describeUsageCleanupFilters(task.Filters))
 	svc.executeTask(ctx, task)
+}
+
+func (s *UsageCleanupService) runRequestBodyCleanup() {
+	svc := s
+	if svc == nil || svc.repo == nil {
+		return
+	}
+	if !atomic.CompareAndSwapInt32(&svc.requestBodyRunning, 0, 1) {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] run skipped: already_running=true")
+		return
+	}
+	defer atomic.StoreInt32(&svc.requestBodyRunning, 0)
+
+	parent := context.Background()
+	if svc.workerCtx != nil {
+		parent = svc.workerCtx
+	}
+	ctx, cancel := context.WithTimeout(parent, svc.taskTimeout())
+	defer cancel()
+
+	retentionDays := usageRequestBodyRetentionDays()
+	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	batchSize := svc.batchSize()
+	var clearedTotal int64
+	var batchNum int
+	start := time.Now()
+
+	for {
+		if ctx.Err() != nil {
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] interrupted: cleared_rows=%d err=%v", clearedTotal, ctx.Err())
+			return
+		}
+
+		batchNum++
+		cleared, err := svc.repo.ClearUsageLogRequestBodiesBatch(ctx, cutoff, batchSize)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] interrupted: cleared_rows=%d err=%v", clearedTotal, err)
+				return
+			}
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] failed: cleared_rows=%d err=%v", clearedTotal, err)
+			return
+		}
+
+		clearedTotal += cleared
+		if batchNum <= 3 || batchNum%20 == 0 || cleared < int64(batchSize) {
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] batch done: batch=%d cleared=%d cleared_total=%d cutoff=%s", batchNum, cleared, clearedTotal, cutoff.UTC().Format(time.RFC3339))
+		}
+		if cleared == 0 || cleared < int64(batchSize) {
+			break
+		}
+	}
+
+	logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] done: cleared_rows=%d retention_days=%d duration=%s", clearedTotal, retentionDays, time.Since(start))
+}
+
+func usageRequestBodyRetentionDays() int {
+	raw := strings.TrimSpace(os.Getenv(usageRequestBodyRetentionDaysEnv))
+	if raw == "" {
+		return defaultUsageRequestBodyRetentionDays
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil || days <= 0 {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] invalid retention env: %s=%q default=%d", usageRequestBodyRetentionDaysEnv, raw, defaultUsageRequestBodyRetentionDays)
+		return defaultUsageRequestBodyRetentionDays
+	}
+	return days
 }
 
 func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanupTask) {

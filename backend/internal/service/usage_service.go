@@ -366,6 +366,21 @@ func (s *UsageService) ListWithFilters(ctx context.Context, params pagination.Pa
 	return logs, result, nil
 }
 
+// ListWithFiltersForAdmin lists usage logs for admin views and includes admin-only body fields.
+func (s *UsageService) ListWithFiltersForAdmin(ctx context.Context, params pagination.PaginationParams, filters usagestats.UsageLogFilters) ([]UsageLog, *pagination.PaginationResult, error) {
+	repo, ok := s.usageRepo.(interface {
+		ListWithFiltersForAdmin(context.Context, pagination.PaginationParams, usagestats.UsageLogFilters) ([]UsageLog, *pagination.PaginationResult, error)
+	})
+	if !ok {
+		return s.ListWithFilters(ctx, params, filters)
+	}
+	logs, result, err := repo.ListWithFiltersForAdmin(ctx, params, filters)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list admin usage logs with filters: %w", err)
+	}
+	return logs, result, nil
+}
+
 // GetGlobalStats returns global usage stats for a time range.
 func (s *UsageService) GetGlobalStats(ctx context.Context, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
 	stats, err := s.usageRepo.GetGlobalStats(ctx, startTime, endTime)

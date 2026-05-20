@@ -1252,6 +1252,9 @@ export interface AdminUsageLog extends UsageLog {
   // 用户请求 IP（仅管理员可见）
   ip_address?: string | null
 
+  // 完整请求体（仅管理员可见）
+  request_body?: string | null
+
   // 最小账号信息（仅管理员接口返回）
   account?: UsageLogAccountSummary
 }

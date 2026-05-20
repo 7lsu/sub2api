@@ -320,6 +320,33 @@ func (r *usageCleanupRepository) DeleteUsageLogsBatch(ctx context.Context, filte
 	return deleted, nil
 }
 
+func (r *usageCleanupRepository) ClearUsageLogRequestBodiesBatch(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	if cutoff.IsZero() {
+		return 0, fmt.Errorf("request body cleanup cutoff is required")
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("request body cleanup limit must be positive")
+	}
+	query := `
+		WITH target AS (
+			SELECT id
+			FROM usage_logs
+			WHERE created_at < $1
+				AND request_body IS NOT NULL
+			ORDER BY created_at ASC, id ASC
+			LIMIT $2
+		)
+		UPDATE usage_logs
+		SET request_body = NULL
+		WHERE id IN (SELECT id FROM target)
+	`
+	result, err := r.sql.ExecContext(ctx, query, cutoff, limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func buildUsageCleanupWhere(filters service.UsageCleanupFilters) (string, []any) {
 	conditions := make([]string, 0, 8)
 	args := make([]any, 0, 8)

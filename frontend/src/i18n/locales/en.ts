@@ -4400,6 +4400,12 @@ export default {
       ipAddress: 'IP',
       clickToViewBalance: 'Click to view balance history',
       failedToLoadUser: 'Failed to load user info',
+      requestBody: {
+        column: 'Request Body',
+        title: 'Request Body',
+        view: 'View',
+        empty: 'No request body'
+      },
       cleanup: {
         button: 'Cleanup',
         title: 'Cleanup Usage Records',

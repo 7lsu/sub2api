@@ -7913,6 +7913,7 @@ type RecordUsageInput struct {
 	UserAgent          string             // 请求的 User-Agent
 	IPAddress          string             // 请求的客户端 IP 地址
 	RequestPayloadHash string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
+	RequestBody        string             // 完整请求体（用于 usage 记录）
 	ForceCacheBilling  bool               // 强制缓存计费：将 input_tokens 转为 cache_read 计费（用于粘性会话切换）
 	APIKeyService      APIKeyQuotaUpdater // 可选：用于更新API Key配额
 
@@ -8324,6 +8325,7 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		UserAgent:          input.UserAgent,
 		IPAddress:          input.IPAddress,
 		RequestPayloadHash: input.RequestPayloadHash,
+		RequestBody:        input.RequestBody,
 		ForceCacheBilling:  input.ForceCacheBilling,
 		APIKeyService:      input.APIKeyService,
 		ChannelUsageFields: input.ChannelUsageFields,
@@ -8344,6 +8346,7 @@ type RecordUsageLongContextInput struct {
 	UserAgent             string             // 请求的 User-Agent
 	IPAddress             string             // 请求的客户端 IP 地址
 	RequestPayloadHash    string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
+	RequestBody           string             // 完整请求体（用于 usage 记录）
 	LongContextThreshold  int                // 长上下文阈值（如 200000）
 	LongContextMultiplier float64            // 超出阈值部分的倍率（如 2.0）
 	ForceCacheBilling     bool               // 强制缓存计费：将 input_tokens 转为 cache_read 计费（用于粘性会话切换）
@@ -8365,6 +8368,7 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 		UserAgent:          input.UserAgent,
 		IPAddress:          input.IPAddress,
 		RequestPayloadHash: input.RequestPayloadHash,
+		RequestBody:        input.RequestBody,
 		ForceCacheBilling:  input.ForceCacheBilling,
 		APIKeyService:      input.APIKeyService,
 		ChannelUsageFields: input.ChannelUsageFields,
@@ -8386,6 +8390,7 @@ type recordUsageCoreInput struct {
 	UserAgent          string
 	IPAddress          string
 	RequestPayloadHash string
+	RequestBody        string
 	ForceCacheBilling  bool
 	APIKeyService      APIKeyQuotaUpdater
 	ChannelUsageFields
@@ -8666,6 +8671,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		ReasoningEffort:       result.ReasoningEffort,
 		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
 		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),
+		RequestBody:           optionalUsageBodyPtr(input.RequestBody),
 		InputTokens:           result.Usage.InputTokens,
 		OutputTokens:          result.Usage.OutputTokens,
 		CacheCreationTokens:   result.Usage.CacheCreationInputTokens,

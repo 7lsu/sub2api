@@ -45,6 +45,8 @@ type UsageLog struct {
 	BillingTier *string `json:"billing_tier,omitempty"`
 	// 计费模式：token/per_request/image
 	BillingMode *string `json:"billing_mode,omitempty"`
+	// 完整请求体，仅管理员接口返回
+	RequestBody *string `json:"request_body,omitempty"`
 	// GroupID holds the value of the "group_id" field.
 	GroupID *int64 `json:"group_id,omitempty"`
 	// SubscriptionID holds the value of the "subscription_id" field.
@@ -196,7 +198,7 @@ func (*UsageLog) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case usagelog.FieldID, usagelog.FieldUserID, usagelog.FieldAPIKeyID, usagelog.FieldAccountID, usagelog.FieldChannelID, usagelog.FieldGroupID, usagelog.FieldSubscriptionID, usagelog.FieldInputTokens, usagelog.FieldOutputTokens, usagelog.FieldCacheCreationTokens, usagelog.FieldCacheReadTokens, usagelog.FieldCacheCreation5mTokens, usagelog.FieldCacheCreation1hTokens, usagelog.FieldBillingType, usagelog.FieldDurationMs, usagelog.FieldFirstTokenMs, usagelog.FieldImageCount:
 			values[i] = new(sql.NullInt64)
-		case usagelog.FieldRequestID, usagelog.FieldModel, usagelog.FieldRequestedModel, usagelog.FieldUpstreamModel, usagelog.FieldModelMappingChain, usagelog.FieldBillingTier, usagelog.FieldBillingMode, usagelog.FieldUserAgent, usagelog.FieldIPAddress, usagelog.FieldImageSize, usagelog.FieldImageInputSize, usagelog.FieldImageOutputSize, usagelog.FieldImageSizeSource:
+		case usagelog.FieldRequestID, usagelog.FieldModel, usagelog.FieldRequestedModel, usagelog.FieldUpstreamModel, usagelog.FieldModelMappingChain, usagelog.FieldBillingTier, usagelog.FieldBillingMode, usagelog.FieldRequestBody, usagelog.FieldUserAgent, usagelog.FieldIPAddress, usagelog.FieldImageSize, usagelog.FieldImageInputSize, usagelog.FieldImageOutputSize, usagelog.FieldImageSizeSource:
 			values[i] = new(sql.NullString)
 		case usagelog.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
@@ -292,6 +294,13 @@ func (_m *UsageLog) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.BillingMode = new(string)
 				*_m.BillingMode = value.String
+			}
+		case usagelog.FieldRequestBody:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field request_body", values[i])
+			} else if value.Valid {
+				_m.RequestBody = new(string)
+				*_m.RequestBody = value.String
 			}
 		case usagelog.FieldGroupID:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -589,6 +598,11 @@ func (_m *UsageLog) String() string {
 	builder.WriteString(", ")
 	if v := _m.BillingMode; v != nil {
 		builder.WriteString("billing_mode=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.RequestBody; v != nil {
+		builder.WriteString("request_body=")
 		builder.WriteString(*v)
 	}
 	builder.WriteString(", ")

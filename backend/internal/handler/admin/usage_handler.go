@@ -186,7 +186,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 		ExactTotal:  exactTotal,
 	}
 
-	records, result, err := h.usageService.ListWithFilters(c.Request.Context(), params, filters)
+	records, result, err := h.usageService.ListWithFiltersForAdmin(c.Request.Context(), params, filters)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

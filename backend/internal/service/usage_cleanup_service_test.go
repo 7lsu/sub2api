@@ -231,6 +231,10 @@ func (s *cleanupRepoStub) DeleteUsageLogsBatch(ctx context.Context, filters Usag
 	return resp.deleted, resp.err
 }
 
+func (s *cleanupRepoStub) ClearUsageLogRequestBodiesBatch(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	return 0, nil
+}
+
 func TestUsageCleanupServiceCreateTaskSanitizeFilters(t *testing.T) {
 	repo := &cleanupRepoStub{}
 	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{Enabled: true, MaxRangeDays: 31}}

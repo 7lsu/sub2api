@@ -78,6 +78,14 @@ func RequestTypeFromLegacy(stream bool, openAIWSMode bool) RequestType {
 	return RequestTypeSync
 }
 
+func optionalUsageBodyPtr(body string) *string {
+	if body == "" {
+		return nil
+	}
+	out := body
+	return &out
+}
+
 func ApplyLegacyRequestFields(requestType RequestType, fallbackStream bool, fallbackOpenAIWSMode bool) (stream bool, openAIWSMode bool) {
 	switch requestType.Normalize() {
 	case RequestTypeSync:
@@ -122,6 +130,8 @@ type UsageLog struct {
 	InboundEndpoint *string
 	// UpstreamEndpoint is the normalized upstream endpoint path, e.g. /v1/responses.
 	UpstreamEndpoint *string
+
+	RequestBody *string
 
 	GroupID        *int64
 	SubscriptionID *int64

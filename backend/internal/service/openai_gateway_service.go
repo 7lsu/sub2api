@@ -5362,6 +5362,7 @@ type OpenAIRecordUsageInput struct {
 	UserAgent          string // 请求的 User-Agent
 	IPAddress          string // 请求的客户端 IP 地址
 	RequestPayloadHash string
+	RequestBody        string // 完整请求体（用于 usage 记录）
 	APIKeyService      APIKeyQuotaUpdater
 	ChannelUsageFields
 }
@@ -5486,6 +5487,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		ReasoningEffort:     result.ReasoningEffort,
 		InboundEndpoint:     optionalTrimmedStringPtr(input.InboundEndpoint),
 		UpstreamEndpoint:    optionalTrimmedStringPtr(input.UpstreamEndpoint),
+		RequestBody:         optionalUsageBodyPtr(input.RequestBody),
 		InputTokens:         actualInputTokens,
 		OutputTokens:        result.Usage.OutputTokens,
 		CacheCreationTokens: result.Usage.CacheCreationInputTokens,

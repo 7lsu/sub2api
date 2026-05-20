@@ -1,5 +1,6 @@
 interface NavigatorUADataLike {
   mobile?: boolean
+  platform?: string
 }
 
 interface NavigatorLike {
