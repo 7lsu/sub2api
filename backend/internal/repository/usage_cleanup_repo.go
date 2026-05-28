@@ -20,6 +20,8 @@ type usageCleanupRepository struct {
 	sql    sqlExecutor
 }
 
+const usageLogRequestBodyMaintenanceLockID int64 = 582921540730815019
+
 func NewUsageCleanupRepository(client *dbent.Client, sqlDB *sql.DB) service.UsageCleanupRepository {
 	return newUsageCleanupRepositoryWithSQL(client, sqlDB)
 }
@@ -320,31 +322,91 @@ func (r *usageCleanupRepository) DeleteUsageLogsBatch(ctx context.Context, filte
 	return deleted, nil
 }
 
-func (r *usageCleanupRepository) ClearUsageLogRequestBodiesBatch(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
-	if cutoff.IsZero() {
-		return 0, fmt.Errorf("request body cleanup cutoff is required")
+func (r *usageCleanupRepository) CompactUsageLogRequestBodies(ctx context.Context) (bool, error) {
+	if r == nil || r.sql == nil {
+		return false, nil
 	}
-	if limit <= 0 {
-		return 0, fmt.Errorf("request body cleanup limit must be positive")
+
+	if db, ok := r.sql.(*sql.DB); ok {
+		return compactUsageLogRequestBodiesWithConn(ctx, db)
 	}
-	query := `
-		WITH target AS (
-			SELECT id
-			FROM usage_logs
-			WHERE created_at < $1
-				AND request_body IS NOT NULL
-			ORDER BY created_at ASC, id ASC
-			LIMIT $2
-		)
-		UPDATE usage_logs
-		SET request_body = NULL
-		WHERE id IN (SELECT id FROM target)
-	`
-	result, err := r.sql.ExecContext(ctx, query, cutoff, limit)
+
+	if err := compactUsageLogRequestBodiesWithExec(ctx, r.sql); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func compactUsageLogRequestBodiesWithConn(ctx context.Context, db *sql.DB) (bool, error) {
+	if db == nil {
+		return false, nil
+	}
+	conn, err := db.Conn(ctx)
 	if err != nil {
-		return 0, err
+		return false, fmt.Errorf("open usage_logs maintenance connection: %w", err)
 	}
-	return result.RowsAffected()
+	defer func() { _ = conn.Close() }()
+
+	var locked bool
+	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", usageLogRequestBodyMaintenanceLockID).Scan(&locked); err != nil {
+		return false, fmt.Errorf("acquire usage_logs request_body maintenance lock: %w", err)
+	}
+	if !locked {
+		return false, nil
+	}
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", usageLogRequestBodyMaintenanceLockID)
+	}()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return true, fmt.Errorf("begin usage_logs request_body maintenance: %w", err)
+	}
+	if err := compactUsageLogRequestBodiesDDL(ctx, tx); err != nil {
+		_ = tx.Rollback()
+		return true, err
+	}
+	if err := tx.Commit(); err != nil {
+		return true, fmt.Errorf("commit usage_logs request_body maintenance ddl: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, "VACUUM FULL public.usage_logs"); err != nil {
+		return true, fmt.Errorf("vacuum full usage_logs: %w", err)
+	}
+	return true, nil
+}
+
+func compactUsageLogRequestBodiesWithExec(ctx context.Context, exec sqlExecutor) error {
+	if exec == nil {
+		return nil
+	}
+	if err := compactUsageLogRequestBodiesDDL(ctx, exec); err != nil {
+		return err
+	}
+	if _, err := exec.ExecContext(ctx, "VACUUM FULL public.usage_logs"); err != nil {
+		return fmt.Errorf("vacuum full usage_logs: %w", err)
+	}
+	return nil
+}
+
+func compactUsageLogRequestBodiesDDL(ctx context.Context, exec interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}) error {
+	statements := []struct {
+		name string
+		sql  string
+	}{
+		{name: "drop request_body", sql: "ALTER TABLE public.usage_logs DROP COLUMN IF EXISTS request_body"},
+		{name: "add request_body", sql: "ALTER TABLE public.usage_logs ADD COLUMN request_body TEXT"},
+		{name: "comment request_body", sql: "COMMENT ON COLUMN public.usage_logs.request_body IS '完整请求体，仅管理员接口返回'"},
+	}
+	for _, stmt := range statements {
+		if _, err := exec.ExecContext(ctx, stmt.sql); err != nil {
+			return fmt.Errorf("%s: %w", stmt.name, err)
+		}
+	}
+	return nil
 }
 
 func buildUsageCleanupWhere(filters service.UsageCleanupFilters) (string, []any) {

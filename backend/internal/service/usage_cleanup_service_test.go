@@ -231,8 +231,8 @@ func (s *cleanupRepoStub) DeleteUsageLogsBatch(ctx context.Context, filters Usag
 	return resp.deleted, resp.err
 }
 
-func (s *cleanupRepoStub) ClearUsageLogRequestBodiesBatch(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
-	return 0, nil
+func (s *cleanupRepoStub) CompactUsageLogRequestBodies(ctx context.Context) (bool, error) {
+	return true, nil
 }
 
 func TestUsageCleanupServiceCreateTaskSanitizeFilters(t *testing.T) {

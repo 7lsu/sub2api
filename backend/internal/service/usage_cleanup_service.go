@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,14 +16,13 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/robfig/cron/v3"
 )
 
 const (
-	usageCleanupWorkerName               = "usage_cleanup_worker"
-	usageRequestBodyCleanupWorkerName    = "usage_request_body_cleanup_worker"
-	usageRequestBodyRetentionDaysEnv     = "USAGE_REQUEST_BODY_RETENTION_DAYS"
-	defaultUsageRequestBodyRetentionDays = 14
-	usageRequestBodyCleanupInterval      = time.Hour
+	usageCleanupWorkerName                     = "usage_cleanup_worker"
+	defaultUsageRequestBodyMaintenanceSchedule = "0 3 * * 0"
+	usageRequestBodyMaintenanceCronStopTimeout = 3 * time.Second
 )
 
 // UsageCleanupService 负责创建与执行使用记录清理任务
@@ -39,10 +36,14 @@ type UsageCleanupService struct {
 	requestBodyRunning int32
 	startOnce          sync.Once
 	stopOnce           sync.Once
+	requestBodyCronMu  sync.Mutex
+	requestBodyCron    *cron.Cron
 
 	workerCtx    context.Context
 	workerCancel context.CancelFunc
 }
+
+var usageRequestBodyMaintenanceCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
 func NewUsageCleanupService(repo UsageCleanupRepository, timingWheel *TimingWheelService, dashboard *DashboardAggregationService, cfg *config.Config) *UsageCleanupService {
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -102,10 +103,11 @@ func (s *UsageCleanupService) Start() {
 
 	interval := s.workerInterval()
 	s.startOnce.Do(func() {
-		retentionDays := usageRequestBodyRetentionDays()
 		s.timingWheel.ScheduleRecurring(usageCleanupWorkerName, interval, s.runOnce)
-		s.timingWheel.ScheduleRecurring(usageRequestBodyCleanupWorkerName, usageRequestBodyCleanupInterval, s.runRequestBodyCleanup)
-		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] started (interval=%s max_range_days=%d batch_size=%d task_timeout=%s request_body_retention_days=%d request_body_interval=%s)", interval, s.maxRangeDays(), s.batchSize(), s.taskTimeout(), retentionDays, usageRequestBodyCleanupInterval)
+		if err := s.startRequestBodyMaintenanceCron(); err != nil {
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyMaintenance] not started: %v", err)
+		}
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] started (interval=%s max_range_days=%d batch_size=%d task_timeout=%s request_body_schedule=%q)", interval, s.maxRangeDays(), s.batchSize(), s.taskTimeout(), s.requestBodyMaintenanceSchedule())
 	})
 }
 
@@ -119,8 +121,8 @@ func (s *UsageCleanupService) Stop() {
 		}
 		if s.timingWheel != nil {
 			s.timingWheel.Cancel(usageCleanupWorkerName)
-			s.timingWheel.Cancel(usageRequestBodyCleanupWorkerName)
 		}
+		s.stopRequestBodyMaintenanceCron()
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] stopped")
 	})
 }
@@ -196,13 +198,65 @@ func (s *UsageCleanupService) runOnce() {
 	svc.executeTask(ctx, task)
 }
 
-func (s *UsageCleanupService) runRequestBodyCleanup() {
+func (s *UsageCleanupService) startRequestBodyMaintenanceCron() error {
+	s.requestBodyCronMu.Lock()
+	defer s.requestBodyCronMu.Unlock()
+
+	if s.requestBodyCron != nil {
+		return nil
+	}
+
+	schedule := s.requestBodyMaintenanceSchedule()
+	loc := time.Local
+	if s.cfg != nil && strings.TrimSpace(s.cfg.Timezone) != "" {
+		if parsed, err := time.LoadLocation(strings.TrimSpace(s.cfg.Timezone)); err == nil && parsed != nil {
+			loc = parsed
+		}
+	}
+
+	c := cron.New(cron.WithParser(usageRequestBodyMaintenanceCronParser), cron.WithLocation(loc))
+	if _, err := c.AddFunc(schedule, func() { s.runRequestBodyMaintenance() }); err != nil {
+		return fmt.Errorf("invalid request body maintenance schedule %q: %w", schedule, err)
+	}
+	c.Start()
+	s.requestBodyCron = c
+	logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyMaintenance] scheduled (schedule=%q tz=%s)", schedule, loc.String())
+	return nil
+}
+
+func (s *UsageCleanupService) stopRequestBodyMaintenanceCron() {
+	s.requestBodyCronMu.Lock()
+	defer s.requestBodyCronMu.Unlock()
+	if s.requestBodyCron == nil {
+		return
+	}
+	ctx := s.requestBodyCron.Stop()
+	select {
+	case <-ctx.Done():
+	case <-time.After(usageRequestBodyMaintenanceCronStopTimeout):
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyMaintenance] cron stop timed out")
+	}
+	s.requestBodyCron = nil
+}
+
+func (s *UsageCleanupService) requestBodyMaintenanceSchedule() string {
+	schedule := ""
+	if s != nil && s.cfg != nil {
+		schedule = strings.TrimSpace(s.cfg.UsageCleanup.RequestBodyMaintenanceSchedule)
+	}
+	if schedule == "" {
+		return defaultUsageRequestBodyMaintenanceSchedule
+	}
+	return schedule
+}
+
+func (s *UsageCleanupService) runRequestBodyMaintenance() {
 	svc := s
 	if svc == nil || svc.repo == nil {
 		return
 	}
 	if !atomic.CompareAndSwapInt32(&svc.requestBodyRunning, 0, 1) {
-		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] run skipped: already_running=true")
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyMaintenance] run skipped: already_running=true")
 		return
 	}
 	defer atomic.StoreInt32(&svc.requestBodyRunning, 0)
@@ -214,53 +268,21 @@ func (s *UsageCleanupService) runRequestBodyCleanup() {
 	ctx, cancel := context.WithTimeout(parent, svc.taskTimeout())
 	defer cancel()
 
-	retentionDays := usageRequestBodyRetentionDays()
-	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
-	batchSize := svc.batchSize()
-	var clearedTotal int64
-	var batchNum int
 	start := time.Now()
-
-	for {
-		if ctx.Err() != nil {
-			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] interrupted: cleared_rows=%d err=%v", clearedTotal, ctx.Err())
+	ran, err := svc.repo.CompactUsageLogRequestBodies(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyMaintenance] interrupted: err=%v", err)
 			return
 		}
-
-		batchNum++
-		cleared, err := svc.repo.ClearUsageLogRequestBodiesBatch(ctx, cutoff, batchSize)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] interrupted: cleared_rows=%d err=%v", clearedTotal, err)
-				return
-			}
-			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] failed: cleared_rows=%d err=%v", clearedTotal, err)
-			return
-		}
-
-		clearedTotal += cleared
-		if batchNum <= 3 || batchNum%20 == 0 || cleared < int64(batchSize) {
-			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] batch done: batch=%d cleared=%d cleared_total=%d cutoff=%s", batchNum, cleared, clearedTotal, cutoff.UTC().Format(time.RFC3339))
-		}
-		if cleared == 0 || cleared < int64(batchSize) {
-			break
-		}
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyMaintenance] failed: err=%v", err)
+		return
 	}
-
-	logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] done: cleared_rows=%d retention_days=%d duration=%s", clearedTotal, retentionDays, time.Since(start))
-}
-
-func usageRequestBodyRetentionDays() int {
-	raw := strings.TrimSpace(os.Getenv(usageRequestBodyRetentionDaysEnv))
-	if raw == "" {
-		return defaultUsageRequestBodyRetentionDays
+	if !ran {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyMaintenance] skipped: lock_held=true")
+		return
 	}
-	days, err := strconv.Atoi(raw)
-	if err != nil || days <= 0 {
-		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyCleanup] invalid retention env: %s=%q default=%d", usageRequestBodyRetentionDaysEnv, raw, defaultUsageRequestBodyRetentionDays)
-		return defaultUsageRequestBodyRetentionDays
-	}
-	return days
+	logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyMaintenance] done: duration=%s", time.Since(start))
 }
 
 func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanupTask) {

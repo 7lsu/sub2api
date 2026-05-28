@@ -1309,6 +1309,8 @@ type UsageCleanupConfig struct {
 	WorkerIntervalSeconds int `mapstructure:"worker_interval_seconds"`
 	// TaskTimeoutSeconds: 单次任务最大执行时长（秒）
 	TaskTimeoutSeconds int `mapstructure:"task_timeout_seconds"`
+	// RequestBodyMaintenanceSchedule: request_body 列重建与 VACUUM FULL 的 5 字段 cron 表达式
+	RequestBodyMaintenanceSchedule string `mapstructure:"request_body_maintenance_schedule"`
 }
 
 func NormalizeRunMode(value string) string {
@@ -1757,6 +1759,7 @@ func setDefaults() {
 	viper.SetDefault("usage_cleanup.batch_size", 5000)
 	viper.SetDefault("usage_cleanup.worker_interval_seconds", 10)
 	viper.SetDefault("usage_cleanup.task_timeout_seconds", 1800)
+	viper.SetDefault("usage_cleanup.request_body_maintenance_schedule", "0 3 * * 0")
 
 	// Idempotency
 	viper.SetDefault("idempotency.observe_only", true)
