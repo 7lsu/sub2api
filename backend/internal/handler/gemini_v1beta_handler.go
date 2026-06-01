@@ -541,7 +541,6 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 				UserAgent:             userAgent,
 				IPAddress:             clientIP,
 				RequestPayloadHash:    requestPayloadHash,
-				RequestBody:           string(body),
 				LongContextThreshold:  200000, // Gemini 200K 阈值
 				LongContextMultiplier: 2.0,    // 超出部分双倍计费
 				ForceCacheBilling:     fs.ForceCacheBilling,

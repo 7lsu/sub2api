@@ -510,6 +510,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 			// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
+			// fork: antigravity 入站不记录请求体（与 embeddings/images/gemini 对齐）
+			requestBodyForLog := string(body)
+			if forced, ok := middleware2.GetForcePlatformFromContext(c); ok && forced == service.PlatformAntigravity {
+				requestBodyForLog = ""
+			}
 			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
 					Result:             result,
@@ -524,7 +529,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
 					RequestPayloadHash: requestPayloadHash,
-					RequestBody:        string(body),
+					RequestBody:        requestBodyForLog,
 					ForceCacheBilling:  fs.ForceCacheBilling,
 					APIKeyService:      h.apiKeyService,
 					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
@@ -906,6 +911,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 			// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), currentAPIKey)
+			// fork: antigravity 入站不记录请求体（与 embeddings/images/gemini 对齐）
+			requestBodyForLog := string(body)
+			if forced, ok := middleware2.GetForcePlatformFromContext(c); ok && forced == service.PlatformAntigravity {
+				requestBodyForLog = ""
+			}
 			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
 					Result:             result,
@@ -920,7 +930,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
 					RequestPayloadHash: requestPayloadHash,
-					RequestBody:        string(body),
+					RequestBody:        requestBodyForLog,
 					ForceCacheBilling:  fs.ForceCacheBilling,
 					APIKeyService:      h.apiKeyService,
 					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
