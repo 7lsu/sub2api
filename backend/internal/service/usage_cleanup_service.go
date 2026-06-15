@@ -21,7 +21,8 @@ import (
 
 const (
 	usageCleanupWorkerName                     = "usage_cleanup_worker"
-	defaultUsageRequestBodyMaintenanceSchedule = "0 3 * * 0"
+	defaultUsageRequestBodyMaintenanceSchedule = "17 3 * * *"
+	defaultUsageRequestBodyRetentionDays       = 7
 	usageRequestBodyMaintenanceCronStopTimeout = 3 * time.Second
 )
 
@@ -250,6 +251,16 @@ func (s *UsageCleanupService) requestBodyMaintenanceSchedule() string {
 	return schedule
 }
 
+func (s *UsageCleanupService) requestBodyRetentionDays() int {
+	if s == nil || s.cfg == nil {
+		return defaultUsageRequestBodyRetentionDays
+	}
+	if s.cfg.UsageCleanup.RequestBodyRetentionDays < 0 {
+		return 0
+	}
+	return s.cfg.UsageCleanup.RequestBodyRetentionDays
+}
+
 func (s *UsageCleanupService) runRequestBodyMaintenance() {
 	svc := s
 	if svc == nil || svc.repo == nil {
@@ -269,7 +280,7 @@ func (s *UsageCleanupService) runRequestBodyMaintenance() {
 	defer cancel()
 
 	start := time.Now()
-	ran, err := svc.repo.CompactUsageLogRequestBodies(ctx)
+	ran, err := svc.repo.CompactUsageLogRequestBodies(ctx, svc.requestBodyRetentionDays())
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyMaintenance] interrupted: err=%v", err)

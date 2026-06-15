@@ -31,13 +31,16 @@ import (
 )
 
 const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, image_count, image_size, image_input_size, image_output_size, image_size_source, image_size_breakdown, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, created_at"
-const adminUsageLogSelectColumns = usageLogSelectColumns + ", request_body"
 
 // usageLogInsertArgTypes must stay in the same order as:
 //  1. prepareUsageLogInsert().args
-//  2. every INSERT/CTE VALUES column list in this file
+//  2. the input-CTE VALUES column list in this file (still includes request_body)
 //  3. execUsageLogInsertNoResult placeholder positions
 //
+// request_body ($44) is no longer stored in usage_logs; it is routed to the
+// partitioned table usage_log_request_bodies. The main-table INSERT/SELECT column
+// lists skip request_body, but the args order (incl. $44) and this type list stay
+// 51-wide so the batch/best-effort input CTE can still feed the child table.
 // Normal SELECT/scan paths use usageLogSelectColumns and do not load request_body.
 var usageLogInsertArgTypes = [...]string{
 	"bigint",      // user_id
@@ -356,69 +359,79 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 		return false, service.MarkUsageLogCreateNotPersisted(ctx.Err())
 	}
 
+	// request_body（$44）已拆到分区子表 usage_log_request_bodies；主表 INSERT 跳过 $44，
+	// 仅对真正插入主表的行写子表（空 request_id / 空 body 天然跳过）。
 	query := `
-		INSERT INTO usage_logs (
-			user_id,
-			api_key_id,
-			account_id,
-			request_id,
-			model,
-			requested_model,
-			upstream_model,
-			group_id,
-			subscription_id,
-			input_tokens,
-			output_tokens,
-			cache_creation_tokens,
-			cache_read_tokens,
-			cache_creation_5m_tokens,
-			cache_creation_1h_tokens,
-			image_output_tokens,
-			image_output_cost,
-			input_cost,
-			output_cost,
-			cache_creation_cost,
-			cache_read_cost,
-			total_cost,
-			actual_cost,
-			rate_multiplier,
-			account_rate_multiplier,
-			billing_type,
-			request_type,
-			stream,
-			openai_ws_mode,
-			duration_ms,
-			first_token_ms,
-			user_agent,
-			ip_address,
-			image_count,
-			image_size,
-			image_input_size,
-			image_output_size,
-			image_size_source,
-			image_size_breakdown,
-			service_tier,
-			reasoning_effort,
-			inbound_endpoint,
-			upstream_endpoint,
-			request_body,
-			cache_ttl_overridden,
-			channel_id,
-			model_mapping_chain,
-			billing_tier,
-			billing_mode,
-			account_stats_cost,
-			created_at
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9,
-			$10, $11, $12, $13,
-			$14, $15, $16, $17,
-			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51
+		WITH ins AS (
+			INSERT INTO usage_logs (
+				user_id,
+				api_key_id,
+				account_id,
+				request_id,
+				model,
+				requested_model,
+				upstream_model,
+				group_id,
+				subscription_id,
+				input_tokens,
+				output_tokens,
+				cache_creation_tokens,
+				cache_read_tokens,
+				cache_creation_5m_tokens,
+				cache_creation_1h_tokens,
+				image_output_tokens,
+				image_output_cost,
+				input_cost,
+				output_cost,
+				cache_creation_cost,
+				cache_read_cost,
+				total_cost,
+				actual_cost,
+				rate_multiplier,
+				account_rate_multiplier,
+				billing_type,
+				request_type,
+				stream,
+				openai_ws_mode,
+				duration_ms,
+				first_token_ms,
+				user_agent,
+				ip_address,
+				image_count,
+				image_size,
+				image_input_size,
+				image_output_size,
+				image_size_source,
+				image_size_breakdown,
+				service_tier,
+				reasoning_effort,
+				inbound_endpoint,
+				upstream_endpoint,
+				cache_ttl_overridden,
+				channel_id,
+				model_mapping_chain,
+				billing_tier,
+				billing_mode,
+				account_stats_cost,
+				created_at
+			) VALUES (
+				$1, $2, $3, $4, $5, $6, $7,
+				$8, $9,
+				$10, $11, $12, $13,
+				$14, $15, $16, $17,
+				$18, $19, $20, $21, $22, $23,
+				$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $45, $46, $47, $48, $49, $50, $51
+			)
+			ON CONFLICT (request_id, api_key_id) DO NOTHING
+			RETURNING id, created_at, request_id, api_key_id
+		), body_ins AS (
+			INSERT INTO usage_log_request_bodies (request_id, api_key_id, created_at, request_body)
+			SELECT ins.request_id, ins.api_key_id, ins.created_at, $44::text
+			FROM ins
+			WHERE ins.request_id IS NOT NULL AND $44::text IS NOT NULL
+			ON CONFLICT (request_id, api_key_id, created_at) DO NOTHING
 		)
-		ON CONFLICT (request_id, api_key_id) DO NOTHING
-		RETURNING id, created_at
+		SELECT id, created_at FROM ins
 	`
 
 	if err := scanSingleRow(ctx, sqlq, query, prepared.args, &log.ID, &log.CreatedAt); err != nil {
@@ -926,7 +939,6 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				reasoning_effort,
 				inbound_endpoint,
 				upstream_endpoint,
-				request_body,
 				cache_ttl_overridden,
 				channel_id,
 				model_mapping_chain,
@@ -979,7 +991,6 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				reasoning_effort,
 				inbound_endpoint,
 				upstream_endpoint,
-				request_body,
 				cache_ttl_overridden,
 				channel_id,
 				model_mapping_chain,
@@ -990,6 +1001,16 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			FROM input
 			ON CONFLICT (request_id, api_key_id) DO NOTHING
 			RETURNING request_id, api_key_id, id, created_at
+		),
+		body_ins AS (
+			INSERT INTO usage_log_request_bodies (request_id, api_key_id, created_at, request_body)
+			SELECT inserted.request_id, inserted.api_key_id, inserted.created_at, input.request_body
+			FROM inserted
+			JOIN input
+				ON input.request_id = inserted.request_id
+				AND input.api_key_id = inserted.api_key_id
+			WHERE input.request_body IS NOT NULL
+			ON CONFLICT (request_id, api_key_id, created_at) DO NOTHING
 		),
 		resolved AS (
 			SELECT
@@ -1106,114 +1127,123 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 	}
 
 	_, _ = query.WriteString(`
+		),
+		ins AS (
+			INSERT INTO usage_logs (
+				user_id,
+				api_key_id,
+				account_id,
+				request_id,
+				model,
+				requested_model,
+				upstream_model,
+				group_id,
+				subscription_id,
+				input_tokens,
+				output_tokens,
+				cache_creation_tokens,
+				cache_read_tokens,
+				cache_creation_5m_tokens,
+				cache_creation_1h_tokens,
+				image_output_tokens,
+				image_output_cost,
+				input_cost,
+				output_cost,
+				cache_creation_cost,
+				cache_read_cost,
+				total_cost,
+				actual_cost,
+				rate_multiplier,
+				account_rate_multiplier,
+				billing_type,
+				request_type,
+				stream,
+				openai_ws_mode,
+				duration_ms,
+				first_token_ms,
+				user_agent,
+				ip_address,
+				image_count,
+				image_size,
+				image_input_size,
+				image_output_size,
+				image_size_source,
+				image_size_breakdown,
+				service_tier,
+				reasoning_effort,
+				inbound_endpoint,
+				upstream_endpoint,
+				cache_ttl_overridden,
+				channel_id,
+				model_mapping_chain,
+				billing_tier,
+				billing_mode,
+				account_stats_cost,
+				created_at
+			)
+			SELECT
+				user_id,
+				api_key_id,
+				account_id,
+				request_id,
+				model,
+				requested_model,
+				upstream_model,
+				group_id,
+				subscription_id,
+				input_tokens,
+				output_tokens,
+				cache_creation_tokens,
+				cache_read_tokens,
+				cache_creation_5m_tokens,
+				cache_creation_1h_tokens,
+				image_output_tokens,
+				image_output_cost,
+				input_cost,
+				output_cost,
+				cache_creation_cost,
+				cache_read_cost,
+				total_cost,
+				actual_cost,
+				rate_multiplier,
+				account_rate_multiplier,
+				billing_type,
+				request_type,
+				stream,
+				openai_ws_mode,
+				duration_ms,
+				first_token_ms,
+				user_agent,
+				ip_address,
+				image_count,
+				image_size,
+				image_input_size,
+				image_output_size,
+				image_size_source,
+				image_size_breakdown,
+				service_tier,
+				reasoning_effort,
+				inbound_endpoint,
+				upstream_endpoint,
+				cache_ttl_overridden,
+				channel_id,
+				model_mapping_chain,
+				billing_tier,
+				billing_mode,
+				account_stats_cost,
+				created_at
+			FROM input
+			ON CONFLICT (request_id, api_key_id) DO NOTHING
+			RETURNING request_id, api_key_id, created_at
 		)
-		INSERT INTO usage_logs (
-			user_id,
-			api_key_id,
-			account_id,
-			request_id,
-			model,
-			requested_model,
-			upstream_model,
-			group_id,
-			subscription_id,
-			input_tokens,
-			output_tokens,
-			cache_creation_tokens,
-			cache_read_tokens,
-			cache_creation_5m_tokens,
-			cache_creation_1h_tokens,
-			image_output_tokens,
-			image_output_cost,
-			input_cost,
-			output_cost,
-			cache_creation_cost,
-			cache_read_cost,
-			total_cost,
-			actual_cost,
-			rate_multiplier,
-			account_rate_multiplier,
-			billing_type,
-			request_type,
-			stream,
-			openai_ws_mode,
-			duration_ms,
-			first_token_ms,
-			user_agent,
-			ip_address,
-			image_count,
-			image_size,
-			image_input_size,
-			image_output_size,
-			image_size_source,
-			image_size_breakdown,
-			service_tier,
-			reasoning_effort,
-			inbound_endpoint,
-			upstream_endpoint,
-			request_body,
-			cache_ttl_overridden,
-			channel_id,
-			model_mapping_chain,
-			billing_tier,
-			billing_mode,
-			account_stats_cost,
-			created_at
-		)
-		SELECT
-			user_id,
-			api_key_id,
-			account_id,
-			request_id,
-			model,
-			requested_model,
-			upstream_model,
-			group_id,
-			subscription_id,
-			input_tokens,
-			output_tokens,
-			cache_creation_tokens,
-			cache_read_tokens,
-			cache_creation_5m_tokens,
-			cache_creation_1h_tokens,
-			image_output_tokens,
-			image_output_cost,
-			input_cost,
-			output_cost,
-			cache_creation_cost,
-			cache_read_cost,
-			total_cost,
-			actual_cost,
-			rate_multiplier,
-			account_rate_multiplier,
-			billing_type,
-			request_type,
-			stream,
-			openai_ws_mode,
-			duration_ms,
-			first_token_ms,
-			user_agent,
-			ip_address,
-			image_count,
-			image_size,
-			image_input_size,
-			image_output_size,
-			image_size_source,
-			image_size_breakdown,
-			service_tier,
-			reasoning_effort,
-			inbound_endpoint,
-			upstream_endpoint,
-			request_body,
-			cache_ttl_overridden,
-			channel_id,
-			model_mapping_chain,
-			billing_tier,
-			billing_mode,
-			account_stats_cost,
-			created_at
-		FROM input
-		ON CONFLICT (request_id, api_key_id) DO NOTHING
+		INSERT INTO usage_log_request_bodies (request_id, api_key_id, created_at, request_body)
+		SELECT ins.request_id, ins.api_key_id, ins.created_at, input.request_body
+		FROM ins
+		JOIN input
+			ON input.request_id = ins.request_id
+			AND input.api_key_id = ins.api_key_id
+		WHERE input.request_body IS NOT NULL
+		ON CONFLICT (request_id, api_key_id, created_at) DO NOTHING
 	`)
 
 	return query.String(), args
@@ -1221,67 +1251,74 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 
 func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared usageLogInsertPrepared) error {
 	_, err := sqlq.ExecContext(ctx, `
-		INSERT INTO usage_logs (
-			user_id,
-			api_key_id,
-			account_id,
-			request_id,
-			model,
-			requested_model,
-			upstream_model,
-			group_id,
-			subscription_id,
-			input_tokens,
-			output_tokens,
-			cache_creation_tokens,
-			cache_read_tokens,
-			cache_creation_5m_tokens,
-			cache_creation_1h_tokens,
-			image_output_tokens,
-			image_output_cost,
-			input_cost,
-			output_cost,
-			cache_creation_cost,
-			cache_read_cost,
-			total_cost,
-			actual_cost,
-			rate_multiplier,
-			account_rate_multiplier,
-			billing_type,
-			request_type,
-			stream,
-			openai_ws_mode,
-			duration_ms,
-			first_token_ms,
-			user_agent,
-			ip_address,
-			image_count,
-			image_size,
-			image_input_size,
-			image_output_size,
-			image_size_source,
-			image_size_breakdown,
-			service_tier,
-			reasoning_effort,
-			inbound_endpoint,
-			upstream_endpoint,
-			request_body,
-			cache_ttl_overridden,
-			channel_id,
-			model_mapping_chain,
-			billing_tier,
-			billing_mode,
-			account_stats_cost,
-			created_at
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9,
-			$10, $11, $12, $13,
-			$14, $15, $16, $17,
-			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51
+		WITH ins AS (
+			INSERT INTO usage_logs (
+				user_id,
+				api_key_id,
+				account_id,
+				request_id,
+				model,
+				requested_model,
+				upstream_model,
+				group_id,
+				subscription_id,
+				input_tokens,
+				output_tokens,
+				cache_creation_tokens,
+				cache_read_tokens,
+				cache_creation_5m_tokens,
+				cache_creation_1h_tokens,
+				image_output_tokens,
+				image_output_cost,
+				input_cost,
+				output_cost,
+				cache_creation_cost,
+				cache_read_cost,
+				total_cost,
+				actual_cost,
+				rate_multiplier,
+				account_rate_multiplier,
+				billing_type,
+				request_type,
+				stream,
+				openai_ws_mode,
+				duration_ms,
+				first_token_ms,
+				user_agent,
+				ip_address,
+				image_count,
+				image_size,
+				image_input_size,
+				image_output_size,
+				image_size_source,
+				image_size_breakdown,
+				service_tier,
+				reasoning_effort,
+				inbound_endpoint,
+				upstream_endpoint,
+				cache_ttl_overridden,
+				channel_id,
+				model_mapping_chain,
+				billing_tier,
+				billing_mode,
+				account_stats_cost,
+				created_at
+			) VALUES (
+				$1, $2, $3, $4, $5, $6, $7,
+				$8, $9,
+				$10, $11, $12, $13,
+				$14, $15, $16, $17,
+				$18, $19, $20, $21, $22, $23,
+				$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $45, $46, $47, $48, $49, $50, $51
+			)
+			ON CONFLICT (request_id, api_key_id) DO NOTHING
+			RETURNING request_id, api_key_id, created_at
 		)
-		ON CONFLICT (request_id, api_key_id) DO NOTHING
+		INSERT INTO usage_log_request_bodies (request_id, api_key_id, created_at, request_body)
+		SELECT ins.request_id, ins.api_key_id, ins.created_at, $44::text
+		FROM ins
+		WHERE ins.request_id IS NOT NULL AND $44::text IS NOT NULL
+		ON CONFLICT (request_id, api_key_id, created_at) DO NOTHING
 	`, prepared.args...)
 	return err
 }
@@ -4014,7 +4051,7 @@ func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, wh
 	limitPos := len(args) + 1
 	offsetPos := len(args) + 2
 	listArgs := append(append([]any{}, args...), params.Limit(), params.Offset())
-	query := fmt.Sprintf("SELECT %s FROM usage_logs %s ORDER BY %s LIMIT $%d OFFSET $%d", usageLogColumns(includeRequestBody), whereClause, usageLogOrderBy(params), limitPos, offsetPos)
+	query := buildUsageLogListQuery(includeRequestBody, whereClause, usageLogOrderBy(params), limitPos, offsetPos)
 	logs, err := r.queryUsageLogs(ctx, includeRequestBody, query, listArgs...)
 	if err != nil {
 		return nil, nil, err
@@ -4029,7 +4066,7 @@ func (r *usageLogRepository) listUsageLogsWithFastPagination(ctx context.Context
 	limitPos := len(args) + 1
 	offsetPos := len(args) + 2
 	listArgs := append(append([]any{}, args...), limit+1, offset)
-	query := fmt.Sprintf("SELECT %s FROM usage_logs %s ORDER BY %s LIMIT $%d OFFSET $%d", usageLogColumns(includeRequestBody), whereClause, usageLogOrderBy(params), limitPos, offsetPos)
+	query := buildUsageLogListQuery(includeRequestBody, whereClause, usageLogOrderBy(params), limitPos, offsetPos)
 
 	logs, err := r.queryUsageLogs(ctx, includeRequestBody, query, listArgs...)
 	if err != nil {
@@ -4071,11 +4108,23 @@ func usageLogOrderBy(params pagination.PaginationParams) string {
 	return fmt.Sprintf("%s %s, id %s", column, sortOrder, sortOrder)
 }
 
-func usageLogColumns(includeRequestBody bool) string {
-	if includeRequestBody {
-		return adminUsageLogSelectColumns
+// buildUsageLogListQuery 构造分页列表查询。
+// includeRequestBody=false（普通用户路径）：仅查 usage_logs，裸列名。
+// includeRequestBody=true（admin 路径）：request_body 已拆到分区子表 usage_log_request_bodies，
+// 故先在内层对 usage_logs 分页（裸列名零歧义、复用现有 where/order/scan），外层再 LEFT JOIN
+// 子表按 (request_id, api_key_id, created_at) 取回 request_body；外层列顺序 = 列清单 + request_body，
+// 与 scanUsageLogWithRequestBody 的 dest 顺序一致。
+func buildUsageLogListQuery(includeRequestBody bool, whereClause, orderBy string, limitPos, offsetPos int) string {
+	if !includeRequestBody {
+		return fmt.Sprintf("SELECT %s FROM usage_logs %s ORDER BY %s LIMIT $%d OFFSET $%d",
+			usageLogSelectColumns, whereClause, orderBy, limitPos, offsetPos)
 	}
-	return usageLogSelectColumns
+	return fmt.Sprintf(
+		"SELECT base.*, b.request_body FROM ("+
+			"SELECT %s FROM usage_logs %s ORDER BY %s LIMIT $%d OFFSET $%d"+
+			") base LEFT JOIN usage_log_request_bodies b "+
+			"ON b.request_id = base.request_id AND b.api_key_id = base.api_key_id AND b.created_at = base.created_at",
+		usageLogSelectColumns, whereClause, orderBy, limitPos, offsetPos)
 }
 
 func (r *usageLogRepository) queryUsageLogs(ctx context.Context, includeRequestBody bool, query string, args ...any) (logs []service.UsageLog, err error) {

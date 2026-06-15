@@ -72,5 +72,5 @@ type UsageCleanupRepository interface {
 	MarkTaskSucceeded(ctx context.Context, taskID int64, deletedRows int64) error
 	MarkTaskFailed(ctx context.Context, taskID int64, deletedRows int64, errorMsg string) error
 	DeleteUsageLogsBatch(ctx context.Context, filters UsageCleanupFilters, limit int) (int64, error)
-	CompactUsageLogRequestBodies(ctx context.Context) (bool, error)
+	CompactUsageLogRequestBodies(ctx context.Context, retentionDays int) (bool, error)
 }

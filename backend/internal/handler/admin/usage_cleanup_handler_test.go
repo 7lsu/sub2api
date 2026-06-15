@@ -102,7 +102,7 @@ func (s *cleanupRepoStub) DeleteUsageLogsBatch(ctx context.Context, filters serv
 	return 0, nil
 }
 
-func (s *cleanupRepoStub) CompactUsageLogRequestBodies(ctx context.Context) (bool, error) {
+func (s *cleanupRepoStub) CompactUsageLogRequestBodies(ctx context.Context, retentionDays int) (bool, error) {
 	return true, nil
 }
 

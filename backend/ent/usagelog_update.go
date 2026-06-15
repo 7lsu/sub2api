@@ -229,26 +229,6 @@ func (_u *UsageLogUpdate) ClearBillingMode() *UsageLogUpdate {
 	return _u
 }
 
-// SetRequestBody sets the "request_body" field.
-func (_u *UsageLogUpdate) SetRequestBody(v string) *UsageLogUpdate {
-	_u.mutation.SetRequestBody(v)
-	return _u
-}
-
-// SetNillableRequestBody sets the "request_body" field if the given value is not nil.
-func (_u *UsageLogUpdate) SetNillableRequestBody(v *string) *UsageLogUpdate {
-	if v != nil {
-		_u.SetRequestBody(*v)
-	}
-	return _u
-}
-
-// ClearRequestBody clears the value of the "request_body" field.
-func (_u *UsageLogUpdate) ClearRequestBody() *UsageLogUpdate {
-	_u.mutation.ClearRequestBody()
-	return _u
-}
-
 // SetGroupID sets the "group_id" field.
 func (_u *UsageLogUpdate) SetGroupID(v int64) *UsageLogUpdate {
 	_u.mutation.SetGroupID(v)
@@ -1068,12 +1048,6 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.BillingModeCleared() {
 		_spec.ClearField(usagelog.FieldBillingMode, field.TypeString)
 	}
-	if value, ok := _u.mutation.RequestBody(); ok {
-		_spec.SetField(usagelog.FieldRequestBody, field.TypeString, value)
-	}
-	if _u.mutation.RequestBodyCleared() {
-		_spec.ClearField(usagelog.FieldRequestBody, field.TypeString)
-	}
 	if value, ok := _u.mutation.InputTokens(); ok {
 		_spec.SetField(usagelog.FieldInputTokens, field.TypeInt, value)
 	}
@@ -1598,26 +1572,6 @@ func (_u *UsageLogUpdateOne) SetNillableBillingMode(v *string) *UsageLogUpdateOn
 // ClearBillingMode clears the value of the "billing_mode" field.
 func (_u *UsageLogUpdateOne) ClearBillingMode() *UsageLogUpdateOne {
 	_u.mutation.ClearBillingMode()
-	return _u
-}
-
-// SetRequestBody sets the "request_body" field.
-func (_u *UsageLogUpdateOne) SetRequestBody(v string) *UsageLogUpdateOne {
-	_u.mutation.SetRequestBody(v)
-	return _u
-}
-
-// SetNillableRequestBody sets the "request_body" field if the given value is not nil.
-func (_u *UsageLogUpdateOne) SetNillableRequestBody(v *string) *UsageLogUpdateOne {
-	if v != nil {
-		_u.SetRequestBody(*v)
-	}
-	return _u
-}
-
-// ClearRequestBody clears the value of the "request_body" field.
-func (_u *UsageLogUpdateOne) ClearRequestBody() *UsageLogUpdateOne {
-	_u.mutation.ClearRequestBody()
 	return _u
 }
 
@@ -2469,12 +2423,6 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if _u.mutation.BillingModeCleared() {
 		_spec.ClearField(usagelog.FieldBillingMode, field.TypeString)
-	}
-	if value, ok := _u.mutation.RequestBody(); ok {
-		_spec.SetField(usagelog.FieldRequestBody, field.TypeString, value)
-	}
-	if _u.mutation.RequestBodyCleared() {
-		_spec.ClearField(usagelog.FieldRequestBody, field.TypeString)
 	}
 	if value, ok := _u.mutation.InputTokens(); ok {
 		_spec.SetField(usagelog.FieldInputTokens, field.TypeInt, value)

@@ -34897,7 +34897,6 @@ type UsageLogMutation struct {
 	model_mapping_chain         *string
 	billing_tier                *string
 	billing_mode                *string
-	request_body                *string
 	input_tokens                *int
 	addinput_tokens             *int
 	output_tokens               *int
@@ -35551,55 +35550,6 @@ func (m *UsageLogMutation) BillingModeCleared() bool {
 func (m *UsageLogMutation) ResetBillingMode() {
 	m.billing_mode = nil
 	delete(m.clearedFields, usagelog.FieldBillingMode)
-}
-
-// SetRequestBody sets the "request_body" field.
-func (m *UsageLogMutation) SetRequestBody(s string) {
-	m.request_body = &s
-}
-
-// RequestBody returns the value of the "request_body" field in the mutation.
-func (m *UsageLogMutation) RequestBody() (r string, exists bool) {
-	v := m.request_body
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldRequestBody returns the old "request_body" field's value of the UsageLog entity.
-// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *UsageLogMutation) OldRequestBody(ctx context.Context) (v *string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldRequestBody is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldRequestBody requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldRequestBody: %w", err)
-	}
-	return oldValue.RequestBody, nil
-}
-
-// ClearRequestBody clears the value of the "request_body" field.
-func (m *UsageLogMutation) ClearRequestBody() {
-	m.request_body = nil
-	m.clearedFields[usagelog.FieldRequestBody] = struct{}{}
-}
-
-// RequestBodyCleared returns if the "request_body" field was cleared in this mutation.
-func (m *UsageLogMutation) RequestBodyCleared() bool {
-	_, ok := m.clearedFields[usagelog.FieldRequestBody]
-	return ok
-}
-
-// ResetRequestBody resets all changes to the "request_body" field.
-func (m *UsageLogMutation) ResetRequestBody() {
-	m.request_body = nil
-	delete(m.clearedFields, usagelog.FieldRequestBody)
 }
 
 // SetGroupID sets the "group_id" field.
@@ -37370,7 +37320,7 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 42)
+	fields := make([]string, 0, 41)
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -37403,9 +37353,6 @@ func (m *UsageLogMutation) Fields() []string {
 	}
 	if m.billing_mode != nil {
 		fields = append(fields, usagelog.FieldBillingMode)
-	}
-	if m.request_body != nil {
-		fields = append(fields, usagelog.FieldRequestBody)
 	}
 	if m.group != nil {
 		fields = append(fields, usagelog.FieldGroupID)
@@ -37527,8 +37474,6 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.BillingTier()
 	case usagelog.FieldBillingMode:
 		return m.BillingMode()
-	case usagelog.FieldRequestBody:
-		return m.RequestBody()
 	case usagelog.FieldGroupID:
 		return m.GroupID()
 	case usagelog.FieldSubscriptionID:
@@ -37620,8 +37565,6 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldBillingTier(ctx)
 	case usagelog.FieldBillingMode:
 		return m.OldBillingMode(ctx)
-	case usagelog.FieldRequestBody:
-		return m.OldRequestBody(ctx)
 	case usagelog.FieldGroupID:
 		return m.OldGroupID(ctx)
 	case usagelog.FieldSubscriptionID:
@@ -37767,13 +37710,6 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetBillingMode(v)
-		return nil
-	case usagelog.FieldRequestBody:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetRequestBody(v)
 		return nil
 	case usagelog.FieldGroupID:
 		v, ok := value.(int64)
@@ -38264,9 +38200,6 @@ func (m *UsageLogMutation) ClearedFields() []string {
 	if m.FieldCleared(usagelog.FieldBillingMode) {
 		fields = append(fields, usagelog.FieldBillingMode)
 	}
-	if m.FieldCleared(usagelog.FieldRequestBody) {
-		fields = append(fields, usagelog.FieldRequestBody)
-	}
 	if m.FieldCleared(usagelog.FieldGroupID) {
 		fields = append(fields, usagelog.FieldGroupID)
 	}
@@ -38334,9 +38267,6 @@ func (m *UsageLogMutation) ClearField(name string) error {
 		return nil
 	case usagelog.FieldBillingMode:
 		m.ClearBillingMode()
-		return nil
-	case usagelog.FieldRequestBody:
-		m.ClearRequestBody()
 		return nil
 	case usagelog.FieldGroupID:
 		m.ClearGroupID()
@@ -38414,9 +38344,6 @@ func (m *UsageLogMutation) ResetField(name string) error {
 		return nil
 	case usagelog.FieldBillingMode:
 		m.ResetBillingMode()
-		return nil
-	case usagelog.FieldRequestBody:
-		m.ResetRequestBody()
 		return nil
 	case usagelog.FieldGroupID:
 		m.ResetGroupID()

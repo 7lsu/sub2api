@@ -322,34 +322,38 @@ func (r *usageCleanupRepository) DeleteUsageLogsBatch(ctx context.Context, filte
 	return deleted, nil
 }
 
-func (r *usageCleanupRepository) CompactUsageLogRequestBodies(ctx context.Context) (bool, error) {
+// CompactUsageLogRequestBodies 维护 request_body 分区子表：提前建未来分区 + DROP 超过保留期的旧分区。
+// 不再 DROP/ADD COLUMN，也不再 VACUUM FULL（DROP 分区直接回收磁盘）。
+func (r *usageCleanupRepository) CompactUsageLogRequestBodies(ctx context.Context, retentionDays int) (bool, error) {
 	if r == nil || r.sql == nil {
 		return false, nil
 	}
 
 	if db, ok := r.sql.(*sql.DB); ok {
-		return compactUsageLogRequestBodiesWithConn(ctx, db)
+		return rollUsageLogRequestBodyPartitionsWithConn(ctx, db, retentionDays)
 	}
 
-	if err := compactUsageLogRequestBodiesWithExec(ctx, r.sql); err != nil {
+	if err := rollUsageLogRequestBodyPartitions(ctx, r.sql, retentionDays); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func compactUsageLogRequestBodiesWithConn(ctx context.Context, db *sql.DB) (bool, error) {
+// rollUsageLogRequestBodyPartitionsWithConn 在一条持有 advisory lock 的连接上执行分区滚动，
+// 防止多实例并发滚动。分区 DDL 幂等，无需事务。
+func rollUsageLogRequestBodyPartitionsWithConn(ctx context.Context, db *sql.DB, retentionDays int) (bool, error) {
 	if db == nil {
 		return false, nil
 	}
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		return false, fmt.Errorf("open usage_logs maintenance connection: %w", err)
+		return false, fmt.Errorf("open usage_log_request_bodies maintenance connection: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
 	var locked bool
 	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", usageLogRequestBodyMaintenanceLockID).Scan(&locked); err != nil {
-		return false, fmt.Errorf("acquire usage_logs request_body maintenance lock: %w", err)
+		return false, fmt.Errorf("acquire usage_log_request_bodies maintenance lock: %w", err)
 	}
 	if !locked {
 		return false, nil
@@ -360,54 +364,71 @@ func compactUsageLogRequestBodiesWithConn(ctx context.Context, db *sql.DB) (bool
 		_, _ = conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", usageLogRequestBodyMaintenanceLockID)
 	}()
 
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return true, fmt.Errorf("begin usage_logs request_body maintenance: %w", err)
-	}
-	if err := compactUsageLogRequestBodiesDDL(ctx, tx); err != nil {
-		_ = tx.Rollback()
+	if err := rollUsageLogRequestBodyPartitions(ctx, conn, retentionDays); err != nil {
 		return true, err
-	}
-	if err := tx.Commit(); err != nil {
-		return true, fmt.Errorf("commit usage_logs request_body maintenance ddl: %w", err)
-	}
-	if _, err := conn.ExecContext(ctx, "VACUUM FULL public.usage_logs"); err != nil {
-		return true, fmt.Errorf("vacuum full usage_logs: %w", err)
 	}
 	return true, nil
 }
 
-func compactUsageLogRequestBodiesWithExec(ctx context.Context, exec sqlExecutor) error {
+// rollUsageLogRequestBodyPartitions 提前创建未来分区并 DROP 超过保留期的旧分区。
+// retentionDays <= 0 时只建未来分区、不删旧分区。
+func rollUsageLogRequestBodyPartitions(ctx context.Context, exec interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, retentionDays int) error {
 	if exec == nil {
 		return nil
 	}
-	if err := compactUsageLogRequestBodiesDDL(ctx, exec); err != nil {
-		return err
+	if _, err := exec.ExecContext(ctx, createUsageLogRequestBodyPartitionsSQL); err != nil {
+		return fmt.Errorf("create future usage_log_request_bodies partitions: %w", err)
 	}
-	if _, err := exec.ExecContext(ctx, "VACUUM FULL public.usage_logs"); err != nil {
-		return fmt.Errorf("vacuum full usage_logs: %w", err)
-	}
-	return nil
-}
-
-func compactUsageLogRequestBodiesDDL(ctx context.Context, exec interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}) error {
-	statements := []struct {
-		name string
-		sql  string
-	}{
-		{name: "drop request_body", sql: "ALTER TABLE public.usage_logs DROP COLUMN IF EXISTS request_body"},
-		{name: "add request_body", sql: "ALTER TABLE public.usage_logs ADD COLUMN request_body TEXT"},
-		{name: "comment request_body", sql: "COMMENT ON COLUMN public.usage_logs.request_body IS '完整请求体，仅管理员接口返回'"},
-	}
-	for _, stmt := range statements {
-		if _, err := exec.ExecContext(ctx, stmt.sql); err != nil {
-			return fmt.Errorf("%s: %w", stmt.name, err)
+	if retentionDays > 0 {
+		dropSQL := strings.ReplaceAll(dropOldUsageLogRequestBodyPartitionsSQLTmpl, "{{RETENTION_DAYS}}", fmt.Sprintf("%d", retentionDays))
+		if _, err := exec.ExecContext(ctx, dropSQL); err != nil {
+			return fmt.Errorf("drop expired usage_log_request_bodies partitions: %w", err)
 		}
 	}
 	return nil
 }
+
+// createUsageLogRequestBodyPartitionsSQL 提前创建今天 .. 今天+7 天的按天分区（幂等，边界统一 UTC）。
+const createUsageLogRequestBodyPartitionsSQL = `
+DO $$
+DECLARE
+    d DATE;
+BEGIN
+    FOR d IN
+        SELECT generate_series(
+            date_trunc('day', now() AT TIME ZONE 'UTC')::date,
+            date_trunc('day', now() AT TIME ZONE 'UTC')::date + INTERVAL '7 day',
+            INTERVAL '1 day'
+        )::date
+    LOOP
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS usage_log_request_bodies_%s PARTITION OF usage_log_request_bodies FOR VALUES FROM (%L) TO (%L)',
+            to_char(d, 'YYYYMMDD'), d, (d + INTERVAL '1 day')::date);
+    END LOOP;
+END $$;`
+
+// dropOldUsageLogRequestBodyPartitionsSQLTmpl DROP 超过保留期的按天分区（不动 DEFAULT 分区）。
+// {{RETENTION_DAYS}} 由 Go 侧以整数替换（无注入风险）。
+const dropOldUsageLogRequestBodyPartitionsSQLTmpl = `
+DO $$
+DECLARE
+    part   RECORD;
+    cutoff DATE := (now() AT TIME ZONE 'UTC')::date - INTERVAL '{{RETENTION_DAYS}} day';
+BEGIN
+    FOR part IN
+        SELECT c.relname
+        FROM pg_inherits i
+        JOIN pg_class c ON c.oid = i.inhrelid
+        JOIN pg_class p ON p.oid = i.inhparent
+        WHERE p.relname = 'usage_log_request_bodies'
+          AND c.relname ~ '^usage_log_request_bodies_[0-9]{8}$'
+          AND to_date(right(c.relname, 8), 'YYYYMMDD') < cutoff
+    LOOP
+        EXECUTE format('DROP TABLE IF EXISTS %I', part.relname);
+    END LOOP;
+END $$;`
 
 func buildUsageCleanupWhere(filters service.UsageCleanupFilters) (string, []any) {
 	conditions := make([]string, 0, 8)

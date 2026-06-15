@@ -110,11 +110,6 @@ func BillingMode(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldBillingMode, v))
 }
 
-// RequestBody applies equality check predicate on the "request_body" field. It's identical to RequestBodyEQ.
-func RequestBody(v string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldEQ(FieldRequestBody, v))
-}
-
 // GroupID applies equality check predicate on the "group_id" field. It's identical to GroupIDEQ.
 func GroupID(v int64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldGroupID, v))
@@ -873,81 +868,6 @@ func BillingModeEqualFold(v string) predicate.UsageLog {
 // BillingModeContainsFold applies the ContainsFold predicate on the "billing_mode" field.
 func BillingModeContainsFold(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldContainsFold(FieldBillingMode, v))
-}
-
-// RequestBodyEQ applies the EQ predicate on the "request_body" field.
-func RequestBodyEQ(v string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldEQ(FieldRequestBody, v))
-}
-
-// RequestBodyNEQ applies the NEQ predicate on the "request_body" field.
-func RequestBodyNEQ(v string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldNEQ(FieldRequestBody, v))
-}
-
-// RequestBodyIn applies the In predicate on the "request_body" field.
-func RequestBodyIn(vs ...string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldIn(FieldRequestBody, vs...))
-}
-
-// RequestBodyNotIn applies the NotIn predicate on the "request_body" field.
-func RequestBodyNotIn(vs ...string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldNotIn(FieldRequestBody, vs...))
-}
-
-// RequestBodyGT applies the GT predicate on the "request_body" field.
-func RequestBodyGT(v string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldGT(FieldRequestBody, v))
-}
-
-// RequestBodyGTE applies the GTE predicate on the "request_body" field.
-func RequestBodyGTE(v string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldGTE(FieldRequestBody, v))
-}
-
-// RequestBodyLT applies the LT predicate on the "request_body" field.
-func RequestBodyLT(v string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldLT(FieldRequestBody, v))
-}
-
-// RequestBodyLTE applies the LTE predicate on the "request_body" field.
-func RequestBodyLTE(v string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldLTE(FieldRequestBody, v))
-}
-
-// RequestBodyContains applies the Contains predicate on the "request_body" field.
-func RequestBodyContains(v string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldContains(FieldRequestBody, v))
-}
-
-// RequestBodyHasPrefix applies the HasPrefix predicate on the "request_body" field.
-func RequestBodyHasPrefix(v string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldHasPrefix(FieldRequestBody, v))
-}
-
-// RequestBodyHasSuffix applies the HasSuffix predicate on the "request_body" field.
-func RequestBodyHasSuffix(v string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldHasSuffix(FieldRequestBody, v))
-}
-
-// RequestBodyIsNil applies the IsNil predicate on the "request_body" field.
-func RequestBodyIsNil() predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldIsNull(FieldRequestBody))
-}
-
-// RequestBodyNotNil applies the NotNil predicate on the "request_body" field.
-func RequestBodyNotNil() predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldNotNull(FieldRequestBody))
-}
-
-// RequestBodyEqualFold applies the EqualFold predicate on the "request_body" field.
-func RequestBodyEqualFold(v string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldEqualFold(FieldRequestBody, v))
-}
-
-// RequestBodyContainsFold applies the ContainsFold predicate on the "request_body" field.
-func RequestBodyContainsFold(v string) predicate.UsageLog {
-	return predicate.UsageLog(sql.FieldContainsFold(FieldRequestBody, v))
 }
 
 // GroupIDEQ applies the EQ predicate on the "group_id" field.

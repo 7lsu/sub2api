@@ -141,20 +141,6 @@ func (_c *UsageLogCreate) SetNillableBillingMode(v *string) *UsageLogCreate {
 	return _c
 }
 
-// SetRequestBody sets the "request_body" field.
-func (_c *UsageLogCreate) SetRequestBody(v string) *UsageLogCreate {
-	_c.mutation.SetRequestBody(v)
-	return _c
-}
-
-// SetNillableRequestBody sets the "request_body" field if the given value is not nil.
-func (_c *UsageLogCreate) SetNillableRequestBody(v *string) *UsageLogCreate {
-	if v != nil {
-		_c.SetRequestBody(*v)
-	}
-	return _c
-}
-
 // SetGroupID sets the "group_id" field.
 func (_c *UsageLogCreate) SetGroupID(v int64) *UsageLogCreate {
 	_c.mutation.SetGroupID(v)
@@ -905,10 +891,6 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 		_spec.SetField(usagelog.FieldBillingMode, field.TypeString, value)
 		_node.BillingMode = &value
 	}
-	if value, ok := _c.mutation.RequestBody(); ok {
-		_spec.SetField(usagelog.FieldRequestBody, field.TypeString, value)
-		_node.RequestBody = &value
-	}
 	if value, ok := _c.mutation.InputTokens(); ok {
 		_spec.SetField(usagelog.FieldInputTokens, field.TypeInt, value)
 		_node.InputTokens = value
@@ -1329,24 +1311,6 @@ func (u *UsageLogUpsert) UpdateBillingMode() *UsageLogUpsert {
 // ClearBillingMode clears the value of the "billing_mode" field.
 func (u *UsageLogUpsert) ClearBillingMode() *UsageLogUpsert {
 	u.SetNull(usagelog.FieldBillingMode)
-	return u
-}
-
-// SetRequestBody sets the "request_body" field.
-func (u *UsageLogUpsert) SetRequestBody(v string) *UsageLogUpsert {
-	u.Set(usagelog.FieldRequestBody, v)
-	return u
-}
-
-// UpdateRequestBody sets the "request_body" field to the value that was provided on create.
-func (u *UsageLogUpsert) UpdateRequestBody() *UsageLogUpsert {
-	u.SetExcluded(usagelog.FieldRequestBody)
-	return u
-}
-
-// ClearRequestBody clears the value of the "request_body" field.
-func (u *UsageLogUpsert) ClearRequestBody() *UsageLogUpsert {
-	u.SetNull(usagelog.FieldRequestBody)
 	return u
 }
 
@@ -2123,27 +2087,6 @@ func (u *UsageLogUpsertOne) UpdateBillingMode() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearBillingMode() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearBillingMode()
-	})
-}
-
-// SetRequestBody sets the "request_body" field.
-func (u *UsageLogUpsertOne) SetRequestBody(v string) *UsageLogUpsertOne {
-	return u.Update(func(s *UsageLogUpsert) {
-		s.SetRequestBody(v)
-	})
-}
-
-// UpdateRequestBody sets the "request_body" field to the value that was provided on create.
-func (u *UsageLogUpsertOne) UpdateRequestBody() *UsageLogUpsertOne {
-	return u.Update(func(s *UsageLogUpsert) {
-		s.UpdateRequestBody()
-	})
-}
-
-// ClearRequestBody clears the value of the "request_body" field.
-func (u *UsageLogUpsertOne) ClearRequestBody() *UsageLogUpsertOne {
-	return u.Update(func(s *UsageLogUpsert) {
-		s.ClearRequestBody()
 	})
 }
 
@@ -3174,27 +3117,6 @@ func (u *UsageLogUpsertBulk) UpdateBillingMode() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearBillingMode() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearBillingMode()
-	})
-}
-
-// SetRequestBody sets the "request_body" field.
-func (u *UsageLogUpsertBulk) SetRequestBody(v string) *UsageLogUpsertBulk {
-	return u.Update(func(s *UsageLogUpsert) {
-		s.SetRequestBody(v)
-	})
-}
-
-// UpdateRequestBody sets the "request_body" field to the value that was provided on create.
-func (u *UsageLogUpsertBulk) UpdateRequestBody() *UsageLogUpsertBulk {
-	return u.Update(func(s *UsageLogUpsert) {
-		s.UpdateRequestBody()
-	})
-}
-
-// ClearRequestBody clears the value of the "request_body" field.
-func (u *UsageLogUpsertBulk) ClearRequestBody() *UsageLogUpsertBulk {
-	return u.Update(func(s *UsageLogUpsert) {
-		s.ClearRequestBody()
 	})
 }
 
