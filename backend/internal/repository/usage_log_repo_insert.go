@@ -41,6 +41,8 @@ var usageLogInsertArgTypes = [...]string{
 	"integer",     // cache_creation_1h_tokens
 	"integer",     // image_output_tokens
 	"numeric",     // image_output_cost
+	"integer",     // image_input_tokens
+	"numeric",     // image_input_cost
 	"numeric",     // input_cost
 	"numeric",     // output_cost
 	"numeric",     // cache_creation_cost
@@ -216,7 +218,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 		return false, service.MarkUsageLogCreateNotPersisted(ctx.Err())
 	}
 
-	// fork: request_body（$55）拆在分区子表 usage_log_request_bodies；主表 INSERT 不含它，
+	// fork: request_body（$57）拆在分区子表 usage_log_request_bodies；主表 INSERT 不含它，
 	// 仅对真正插入主表的行写子表（空 request_id / 空 body 天然跳过）。
 	query := `
 		WITH ins AS (
@@ -238,6 +240,8 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 				cache_creation_1h_tokens,
 				image_output_tokens,
 				image_output_cost,
+				image_input_tokens,
+				image_input_cost,
 				input_cost,
 				output_cost,
 				cache_creation_cost,
@@ -281,15 +285,15 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 				$10, $11, $12, $13,
 				$14, $15, $16, $17,
 				$18, $19, $20, $21, $22, $23,
-				$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54
+				$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56
 			)
 			ON CONFLICT (request_id, api_key_id) DO NOTHING
 			RETURNING id, created_at, request_id, api_key_id
 		), body_ins AS (
 			INSERT INTO usage_log_request_bodies (request_id, api_key_id, created_at, request_body)
-			SELECT ins.request_id, ins.api_key_id, ins.created_at, $55::text
+			SELECT ins.request_id, ins.api_key_id, ins.created_at, $57::text
 			FROM ins
-			WHERE ins.request_id IS NOT NULL AND $55::text IS NOT NULL
+			WHERE ins.request_id IS NOT NULL AND $57::text IS NOT NULL
 			ON CONFLICT (request_id, api_key_id, created_at) DO NOTHING
 		)
 		SELECT id, created_at FROM ins
@@ -698,6 +702,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			cache_creation_1h_tokens,
 			image_output_tokens,
 			image_output_cost,
+			image_input_tokens,
+			image_input_cost,
 			input_cost,
 			output_cost,
 			cache_creation_cost,
@@ -738,7 +744,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			request_body
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(keys)*54)
+	args := make([]any, 0, len(keys)*56)
 	argPos := 1
 	for idx, key := range keys {
 		if idx > 0 {
@@ -784,6 +790,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				cache_creation_1h_tokens,
 				image_output_tokens,
 				image_output_cost,
+				image_input_tokens,
+				image_input_cost,
 				input_cost,
 				output_cost,
 				cache_creation_cost,
@@ -840,6 +848,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				cache_creation_1h_tokens,
 				image_output_tokens,
 				image_output_cost,
+				image_input_tokens,
+				image_input_cost,
 				input_cost,
 				output_cost,
 				cache_creation_cost,
@@ -946,6 +956,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			cache_creation_1h_tokens,
 			image_output_tokens,
 			image_output_cost,
+			image_input_tokens,
+			image_input_cost,
 			input_cost,
 			output_cost,
 			cache_creation_cost,
@@ -986,7 +998,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			request_body
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(preparedList)*54)
+	args := make([]any, 0, len(preparedList)*56)
 	argPos := 1
 	for idx, prepared := range preparedList {
 		if idx > 0 {
@@ -1030,6 +1042,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			cache_creation_1h_tokens,
 			image_output_tokens,
 			image_output_cost,
+			image_input_tokens,
+			image_input_cost,
 			input_cost,
 			output_cost,
 			cache_creation_cost,
@@ -1086,6 +1100,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			cache_creation_1h_tokens,
 			image_output_tokens,
 			image_output_cost,
+			image_input_tokens,
+			image_input_cost,
 			input_cost,
 			output_cost,
 			cache_creation_cost,
@@ -1161,6 +1177,8 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			cache_creation_1h_tokens,
 			image_output_tokens,
 			image_output_cost,
+			image_input_tokens,
+			image_input_cost,
 			input_cost,
 			output_cost,
 			cache_creation_cost,
@@ -1204,15 +1222,15 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING request_id, api_key_id, created_at
 		)
 		INSERT INTO usage_log_request_bodies (request_id, api_key_id, created_at, request_body)
-		SELECT ins.request_id, ins.api_key_id, ins.created_at, $55::text
+		SELECT ins.request_id, ins.api_key_id, ins.created_at, $57::text
 		FROM ins
-		WHERE ins.request_id IS NOT NULL AND $55::text IS NOT NULL
+		WHERE ins.request_id IS NOT NULL AND $57::text IS NOT NULL
 		ON CONFLICT (request_id, api_key_id, created_at) DO NOTHING
 	`, prepared.args...)
 	return err
@@ -1287,6 +1305,8 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			log.CacheCreation1hTokens,
 			log.ImageOutputTokens,
 			log.ImageOutputCost,
+			log.ImageInputTokens,
+			log.ImageInputCost,
 			log.InputCost,
 			log.OutputCost,
 			log.CacheCreationCost,
@@ -1324,7 +1344,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			billingMode,
 			log.AccountStatsCost, // account_stats_cost
 			createdAt,
-			// fork: request_body（$55）不入主表列，仅供 CTE 写分区子表 usage_log_request_bodies
+			// fork: request_body（$57）不入主表列，仅供 CTE 写分区子表 usage_log_request_bodies
 			requestBody,
 		},
 	}
