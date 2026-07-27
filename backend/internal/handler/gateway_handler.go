@@ -540,6 +540,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			if forced, ok := middleware2.GetForcePlatformFromContext(c); ok && forced == service.PlatformAntigravity {
 				requestBodyForLog = ""
 			}
+			sessionID := service.ExtractClientSessionID(c)
 			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
 					Result:             result,
@@ -552,6 +553,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					UpstreamEndpoint:   upstreamEndpoint,
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
+					SessionID:          sessionID,
 					RequestPayloadHash: requestPayloadHash,
 					RequestBody:        requestBodyForLog,
 					ForceCacheBilling:  forceCacheBilling,
@@ -981,6 +983,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			if forced, ok := middleware2.GetForcePlatformFromContext(c); ok && forced == service.PlatformAntigravity {
 				requestBodyForLog = ""
 			}
+			sessionID := service.ExtractClientSessionID(c)
 			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
 					Result:             result,
@@ -993,6 +996,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					UpstreamEndpoint:   upstreamEndpoint,
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
+					SessionID:          sessionID,
 					RequestPayloadHash: requestPayloadHash,
 					RequestBody:        requestBodyForLog,
 					ForceCacheBilling:  forceCacheBilling,

@@ -79,6 +79,7 @@ var usageLogInsertArgTypes = [...]string{
 	"text",        // billing_tier
 	"text",        // billing_mode
 	"numeric",     // account_stats_cost
+	"text",        // session_id
 	"timestamptz", // created_at
 	"text",        // fork: request_body（仅写分区子表，不入主表列）
 }
@@ -218,7 +219,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 		return false, service.MarkUsageLogCreateNotPersisted(ctx.Err())
 	}
 
-	// fork: request_body（$57）拆在分区子表 usage_log_request_bodies；主表 INSERT 不含它，
+	// fork: request_body（$58）拆在分区子表 usage_log_request_bodies；主表 INSERT 不含它，
 	// 仅对真正插入主表的行写子表（空 request_id / 空 body 天然跳过）。
 	query := `
 		WITH ins AS (
@@ -278,6 +279,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 				billing_tier,
 				billing_mode,
 				account_stats_cost,
+				session_id,
 				created_at
 			) VALUES (
 				$1, $2, $3, $4, $5, $6, $7,
@@ -285,15 +287,15 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 				$10, $11, $12, $13,
 				$14, $15, $16, $17,
 				$18, $19, $20, $21, $22, $23,
-				$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56
+				$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57
 			)
 			ON CONFLICT (request_id, api_key_id) DO NOTHING
 			RETURNING id, created_at, request_id, api_key_id
 		), body_ins AS (
 			INSERT INTO usage_log_request_bodies (request_id, api_key_id, created_at, request_body)
-			SELECT ins.request_id, ins.api_key_id, ins.created_at, $57::text
+			SELECT ins.request_id, ins.api_key_id, ins.created_at, $58::text
 			FROM ins
-			WHERE ins.request_id IS NOT NULL AND $57::text IS NOT NULL
+			WHERE ins.request_id IS NOT NULL AND $58::text IS NOT NULL
 			ON CONFLICT (request_id, api_key_id, created_at) DO NOTHING
 		)
 		SELECT id, created_at FROM ins
@@ -740,11 +742,14 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
+			session_id,
 			created_at,
 			request_body
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(keys)*56)
+	// Each batch row prepends the synthetic input_index before the 57
+	// usage-log column values, plus the fork-only request_body tail value.
+	args := make([]any, 0, len(keys)*59)
 	argPos := 1
 	for idx, key := range keys {
 		if idx > 0 {
@@ -828,6 +833,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				billing_tier,
 				billing_mode,
 				account_stats_cost,
+				session_id,
 				created_at
 			)
 			SELECT
@@ -886,6 +892,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				billing_tier,
 				billing_mode,
 				account_stats_cost,
+				session_id,
 				created_at
 			FROM input
 			ON CONFLICT (request_id, api_key_id) DO NOTHING
@@ -994,11 +1001,12 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
+			session_id,
 			created_at,
 			request_body
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(preparedList)*56)
+	args := make([]any, 0, len(preparedList)*58)
 	argPos := 1
 	for idx, prepared := range preparedList {
 		if idx > 0 {
@@ -1080,6 +1088,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
+			session_id,
 			created_at
 		)
 		SELECT
@@ -1138,6 +1147,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
+			session_id,
 			created_at
 		FROM input
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
@@ -1215,6 +1225,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
+			session_id,
 			created_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
@@ -1222,15 +1233,15 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING request_id, api_key_id, created_at
 		)
 		INSERT INTO usage_log_request_bodies (request_id, api_key_id, created_at, request_body)
-		SELECT ins.request_id, ins.api_key_id, ins.created_at, $57::text
+		SELECT ins.request_id, ins.api_key_id, ins.created_at, $58::text
 		FROM ins
-		WHERE ins.request_id IS NOT NULL AND $57::text IS NOT NULL
+		WHERE ins.request_id IS NOT NULL AND $58::text IS NOT NULL
 		ON CONFLICT (request_id, api_key_id, created_at) DO NOTHING
 	`, prepared.args...)
 	return err
@@ -1271,6 +1282,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	modelMappingChain := nullString(log.ModelMappingChain)
 	billingTier := nullString(log.BillingTier)
 	billingMode := nullString(log.BillingMode)
+	sessionID := nullString(log.SessionID)
 	requestedModel := strings.TrimSpace(log.RequestedModel)
 	if requestedModel == "" {
 		requestedModel = strings.TrimSpace(log.Model)
@@ -1343,8 +1355,9 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			billingTier,
 			billingMode,
 			log.AccountStatsCost, // account_stats_cost
+			sessionID,            // session_id
 			createdAt,
-			// fork: request_body（$57）不入主表列，仅供 CTE 写分区子表 usage_log_request_bodies
+			// fork: request_body（$58）不入主表列，仅供 CTE 写分区子表 usage_log_request_bodies
 			requestBody,
 		},
 	}
