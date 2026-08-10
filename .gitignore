@@ -144,3 +144,6 @@ frontend/coverage/
 aicodex
 output/
 docker-build.sh
+
+# Vitest / Vite cache at repo root
+.vite/
