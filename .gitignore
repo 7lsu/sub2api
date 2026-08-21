@@ -143,7 +143,6 @@ docs/*
 frontend/coverage/
 aicodex
 output/
-docker-build.sh
 .codegraph/
 
 # Vitest / Vite cache at repo root
