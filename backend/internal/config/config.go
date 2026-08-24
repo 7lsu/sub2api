@@ -1741,6 +1741,10 @@ type UsageCleanupConfig struct {
 	RequestBodyMaintenanceSchedule string `mapstructure:"request_body_maintenance_schedule"`
 	// RequestBodyRetentionDays: request_body 分区保留天数，超期分区按天 DROP；0 表示只建不删
 	RequestBodyRetentionDays int `mapstructure:"request_body_retention_days"`
+	// RequestBodyDiskGuardPercent: 剩余磁盘低于该百分比时，逐天 DROP 最早的 request_body 分区；0 表示关闭
+	RequestBodyDiskGuardPercent int `mapstructure:"request_body_disk_guard_percent"`
+	// RequestBodyDiskGuardPath: 用于探测剩余磁盘的挂载点路径（应指向 PostgreSQL 数据目录所在文件系统）
+	RequestBodyDiskGuardPath string `mapstructure:"request_body_disk_guard_path"`
 }
 
 func NormalizeRunMode(value string) string {
@@ -2322,6 +2326,8 @@ func setDefaults() {
 	viper.SetDefault("usage_cleanup.task_timeout_seconds", 1800)
 	viper.SetDefault("usage_cleanup.request_body_maintenance_schedule", "17 3 * * *")
 	viper.SetDefault("usage_cleanup.request_body_retention_days", 7)
+	viper.SetDefault("usage_cleanup.request_body_disk_guard_percent", 10)
+	viper.SetDefault("usage_cleanup.request_body_disk_guard_path", "/")
 
 	// Idempotency
 	viper.SetDefault("idempotency.observe_only", true)
@@ -3211,6 +3217,9 @@ func (c *Config) Validate() error {
 		if c.UsageCleanup.TaskTimeoutSeconds < 0 {
 			return fmt.Errorf("usage_cleanup.task_timeout_seconds must be non-negative")
 		}
+	}
+	if c.UsageCleanup.RequestBodyDiskGuardPercent < 0 || c.UsageCleanup.RequestBodyDiskGuardPercent >= 100 {
+		return fmt.Errorf("usage_cleanup.request_body_disk_guard_percent must be in [0, 100)")
 	}
 	if c.Idempotency.DefaultTTLSeconds <= 0 {
 		return fmt.Errorf("idempotency.default_ttl_seconds must be positive")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -53,6 +54,10 @@ type cleanupRepoStub struct {
 	cancelErr     error
 	cancelResult  *bool
 	markFailedErr error
+
+	droppablePartitions []string
+	droppedPartitions   []string
+	dropErr             error
 }
 
 type dashboardRepoStub struct {
@@ -233,6 +238,21 @@ func (s *cleanupRepoStub) DeleteUsageLogsBatch(ctx context.Context, filters Usag
 
 func (s *cleanupRepoStub) CompactUsageLogRequestBodies(ctx context.Context, retentionDays int) (bool, error) {
 	return true, nil
+}
+
+func (s *cleanupRepoStub) DropOldestUsageLogRequestBodyPartition(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dropErr != nil {
+		return "", s.dropErr
+	}
+	if len(s.droppablePartitions) == 0 {
+		return "", nil
+	}
+	name := s.droppablePartitions[0]
+	s.droppablePartitions = s.droppablePartitions[1:]
+	s.droppedPartitions = append(s.droppedPartitions, name)
+	return name, nil
 }
 
 func TestUsageCleanupServiceCreateTaskSanitizeFilters(t *testing.T) {
@@ -893,4 +913,89 @@ func TestUsageCleanupServiceIsTaskCanceledError(t *testing.T) {
 	_, err := svc.isTaskCanceled(context.Background(), 9)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "status err")
+}
+
+func newDiskGuardService(repo *cleanupRepoStub, thresholdPercent int, freeSeries []float64) *UsageCleanupService {
+	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{
+		Enabled:                     true,
+		MaxRangeDays:                31,
+		RequestBodyDiskGuardPercent: thresholdPercent,
+	}}
+	svc := NewUsageCleanupService(repo, nil, nil, cfg)
+	var idx int
+	svc.diskFreePercent = func(string) (float64, error) {
+		v := freeSeries[idx]
+		if idx < len(freeSeries)-1 {
+			idx++
+		}
+		return v, nil
+	}
+	return svc
+}
+
+func TestRequestBodyDiskGuardDropsUntilAboveThreshold(t *testing.T) {
+	repo := &cleanupRepoStub{droppablePartitions: []string{"usage_log_request_bodies_20240101", "usage_log_request_bodies_20240102", "usage_log_request_bodies_20240103"}}
+	// 探测序列：触发前 4%，DROP 一次后 7%（仍低于阈值），再 DROP 一次后 12%。
+	svc := newDiskGuardService(repo, 10, []float64{4, 7, 12})
+
+	svc.runRequestBodyDiskGuard()
+
+	require.Equal(t, []string{"usage_log_request_bodies_20240101", "usage_log_request_bodies_20240102"}, repo.droppedPartitions)
+}
+
+func TestRequestBodyDiskGuardSkipsWhenDiskHealthy(t *testing.T) {
+	repo := &cleanupRepoStub{droppablePartitions: []string{"usage_log_request_bodies_20240101"}}
+	svc := newDiskGuardService(repo, 10, []float64{10})
+
+	svc.runRequestBodyDiskGuard()
+
+	require.Empty(t, repo.droppedPartitions)
+}
+
+func TestRequestBodyDiskGuardStopsWhenNothingDroppable(t *testing.T) {
+	repo := &cleanupRepoStub{}
+	svc := newDiskGuardService(repo, 10, []float64{1})
+
+	svc.runRequestBodyDiskGuard()
+
+	require.Empty(t, repo.droppedPartitions)
+}
+
+func TestRequestBodyDiskGuardDisabledWhenPercentZero(t *testing.T) {
+	repo := &cleanupRepoStub{droppablePartitions: []string{"usage_log_request_bodies_20240101"}}
+	svc := newDiskGuardService(repo, 0, []float64{1})
+
+	svc.runRequestBodyDiskGuard()
+
+	require.Empty(t, repo.droppedPartitions)
+}
+
+func TestRequestBodyDiskGuardStopsAtMaxDrops(t *testing.T) {
+	partitions := make([]string, 0, usageRequestBodyDiskGuardMaxDrops+3)
+	for i := 0; i < usageRequestBodyDiskGuardMaxDrops+3; i++ {
+		partitions = append(partitions, fmt.Sprintf("usage_log_request_bodies_2024010%d", i))
+	}
+	repo := &cleanupRepoStub{droppablePartitions: partitions}
+	// 磁盘探测永远返回低水位（例如探测路径根本不是 DB 所在盘），必须被 max drops 兜住。
+	svc := newDiskGuardService(repo, 10, []float64{1})
+
+	svc.runRequestBodyDiskGuard()
+
+	require.Len(t, repo.droppedPartitions, usageRequestBodyDiskGuardMaxDrops)
+}
+
+// disk guard 不受 usage_cleanup.enabled 影响，只由 request_body_disk_guard_percent 控制。
+func TestRequestBodyDiskGuardIndependentOfCleanupEnabled(t *testing.T) {
+	repo := &cleanupRepoStub{droppablePartitions: []string{"usage_log_request_bodies_20240101"}}
+	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{
+		Enabled:                     false,
+		RequestBodyDiskGuardPercent: 10,
+	}}
+	svc := NewUsageCleanupService(repo, nil, nil, cfg)
+	svc.diskFreePercent = func(string) (float64, error) { return 2, nil }
+
+	require.Equal(t, 10, svc.requestBodyDiskGuardPercent())
+
+	svc.runRequestBodyDiskGuard()
+	require.Equal(t, []string{"usage_log_request_bodies_20240101"}, repo.droppedPartitions)
 }

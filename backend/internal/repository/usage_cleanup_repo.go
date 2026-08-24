@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -342,9 +343,15 @@ func (r *usageCleanupRepository) CompactUsageLogRequestBodies(ctx context.Contex
 	return true, nil
 }
 
-// rollUsageLogRequestBodyPartitionsWithConn 在一条持有 advisory lock 的连接上执行分区滚动，
-// 防止多实例并发滚动。分区 DDL 幂等，无需事务。
-func rollUsageLogRequestBodyPartitionsWithConn(ctx context.Context, db *sql.DB, retentionDays int) (bool, error) {
+// usageLogRequestBodyMaintenanceLockTimeout 分区 DDL 等待表锁的上限。
+// CREATE/DROP PARTITION 需要父表 ACCESS EXCLUSIVE 锁，一旦排队就会把后续所有
+// usage_log_request_bodies 写入堵在锁队列后面；拿不到就快速失败，等下一轮重试。
+const usageLogRequestBodyMaintenanceLockTimeout = "5s"
+
+// withUsageLogRequestBodyMaintenanceConn 在一条专用连接上取 advisory lock（防多实例并发）
+// 并设置 lock_timeout 后执行 fn。返回 false 表示锁被其他实例持有，fn 未执行。
+// 分区 DDL 幂等，无需事务。
+func withUsageLogRequestBodyMaintenanceConn(ctx context.Context, db *sql.DB, fn func(*sql.Conn) error) (bool, error) {
 	if db == nil {
 		return false, nil
 	}
@@ -362,15 +369,24 @@ func rollUsageLogRequestBodyPartitionsWithConn(ctx context.Context, db *sql.DB, 
 		return false, nil
 	}
 	defer func() {
-		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// 连接会归还连接池，会话级 lock_timeout 必须还原；用独立 ctx 保证调用方超时后仍能清理。
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, _ = conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", usageLogRequestBodyMaintenanceLockID)
+		_, _ = conn.ExecContext(cleanupCtx, "RESET lock_timeout")
+		_, _ = conn.ExecContext(cleanupCtx, "SELECT pg_advisory_unlock($1)", usageLogRequestBodyMaintenanceLockID)
 	}()
 
-	if err := rollUsageLogRequestBodyPartitions(ctx, conn, retentionDays); err != nil {
-		return true, err
+	if _, err := conn.ExecContext(ctx, "SET lock_timeout = '"+usageLogRequestBodyMaintenanceLockTimeout+"'"); err != nil {
+		return true, fmt.Errorf("set usage_log_request_bodies maintenance lock_timeout: %w", err)
 	}
-	return true, nil
+
+	return true, fn(conn)
+}
+
+func rollUsageLogRequestBodyPartitionsWithConn(ctx context.Context, db *sql.DB, retentionDays int) (bool, error) {
+	return withUsageLogRequestBodyMaintenanceConn(ctx, db, func(conn *sql.Conn) error {
+		return rollUsageLogRequestBodyPartitions(ctx, conn, retentionDays)
+	})
 }
 
 // rollUsageLogRequestBodyPartitions 提前创建未来分区并 DROP 超过保留期的旧分区。
@@ -411,6 +427,63 @@ BEGIN
             to_char(d, 'YYYYMMDD'), d, (d + INTERVAL '1 day')::date);
     END LOOP;
 END $$;`
+
+var usageLogRequestBodyPartitionNamePattern = regexp.MustCompile(`^usage_log_request_bodies_[0-9]{8}$`)
+
+// selectOldestUsageLogRequestBodyPartitionSQL 取最早一天的按天分区。
+// 排除今天及未来的分区：删掉它们会让在途写入落进 DEFAULT 分区，而 DEFAULT 分区无法按天回收。
+const selectOldestUsageLogRequestBodyPartitionSQL = `
+SELECT c.relname
+FROM pg_inherits i
+JOIN pg_class c ON c.oid = i.inhrelid
+JOIN pg_class p ON p.oid = i.inhparent
+WHERE p.relname = 'usage_log_request_bodies'
+  AND c.relname ~ '^usage_log_request_bodies_[0-9]{8}$'
+  AND to_date(right(c.relname, 8), 'YYYYMMDD') < (now() AT TIME ZONE 'UTC')::date
+ORDER BY c.relname ASC
+LIMIT 1`
+
+// DropOldestUsageLogRequestBodyPartition 磁盘告急时应急释放：DROP 最早一天的 request_body 分区。
+// 复用日常维护的 advisory lock，避免与分区滚动并发执行 DDL。
+func (r *usageCleanupRepository) DropOldestUsageLogRequestBodyPartition(ctx context.Context) (string, error) {
+	if r == nil || r.sql == nil {
+		return "", nil
+	}
+
+	db, ok := r.sql.(*sql.DB)
+	if !ok {
+		return dropOldestUsageLogRequestBodyPartition(ctx, r.sql)
+	}
+
+	var dropped string
+	if _, err := withUsageLogRequestBodyMaintenanceConn(ctx, db, func(conn *sql.Conn) error {
+		name, err := dropOldestUsageLogRequestBodyPartition(ctx, conn)
+		dropped = name
+		return err
+	}); err != nil {
+		return "", err
+	}
+	return dropped, nil
+}
+
+func dropOldestUsageLogRequestBodyPartition(ctx context.Context, exec sqlExecutor) (string, error) {
+	var relname string
+	err := scanSingleRow(ctx, exec, selectOldestUsageLogRequestBodyPartitionSQL, nil, &relname)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("select oldest usage_log_request_bodies partition: %w", err)
+	}
+	// 分区名来自 pg_class 且已被 SQL 侧正则约束，这里再校验一次才拼接标识符。
+	if !usageLogRequestBodyPartitionNamePattern.MatchString(relname) {
+		return "", fmt.Errorf("unexpected usage_log_request_bodies partition name %q", relname)
+	}
+	if _, err := exec.ExecContext(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %q`, relname)); err != nil {
+		return "", fmt.Errorf("drop usage_log_request_bodies partition %s: %w", relname, err)
+	}
+	return relname, nil
+}
 
 // dropOldUsageLogRequestBodyPartitionsSQLTmpl DROP 超过保留期的按天分区（不动 DEFAULT 分区）。
 // {{RETENTION_DAYS}} 由 Go 侧以整数替换（无注入风险）。

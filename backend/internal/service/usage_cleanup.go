@@ -73,4 +73,7 @@ type UsageCleanupRepository interface {
 	MarkTaskFailed(ctx context.Context, taskID int64, deletedRows int64, errorMsg string) error
 	DeleteUsageLogsBatch(ctx context.Context, filters UsageCleanupFilters, limit int) (int64, error)
 	CompactUsageLogRequestBodies(ctx context.Context, retentionDays int) (bool, error)
+	// DropOldestUsageLogRequestBodyPartition DROP 最早一天的 request_body 分区（不含今天及未来、不含 DEFAULT），
+	// 返回被删分区名；无可删分区时返回空字符串。用于磁盘水位告急时的应急释放。
+	DropOldestUsageLogRequestBodyPartition(ctx context.Context) (string, error)
 }

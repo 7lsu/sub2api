@@ -775,6 +775,13 @@ usage_cleanup:
   # Task execution timeout (seconds)
   # 单次任务最大执行时长（秒）
   task_timeout_seconds: 1800
+  # Free-disk floor (%). Below it, the oldest usage_log_request_bodies day partition is dropped
+  # every 5 min until free space recovers. 0 disables.
+  # 剩余磁盘低于该百分比时，每 5 分钟逐天 DROP 最早的 usage_log_request_bodies 分区直至回升；0 表示关闭
+  request_body_disk_guard_percent: 10
+  # Mount point probed for free space; must be the filesystem holding the PostgreSQL data dir
+  # 探测剩余磁盘的挂载点，需与 PostgreSQL 数据目录在同一文件系统
+  request_body_disk_guard_path: "/"
 
 # =============================================================================
 # HTTP 写接口幂等配置

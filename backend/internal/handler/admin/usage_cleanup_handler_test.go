@@ -106,6 +106,10 @@ func (s *cleanupRepoStub) CompactUsageLogRequestBodies(ctx context.Context, rete
 	return true, nil
 }
 
+func (s *cleanupRepoStub) DropOldestUsageLogRequestBodyPartition(ctx context.Context) (string, error) {
+	return "", nil
+}
+
 var _ service.UsageCleanupRepository = (*cleanupRepoStub)(nil)
 
 func setupCleanupRouter(cleanupService *service.UsageCleanupService, userID int64) *gin.Engine {

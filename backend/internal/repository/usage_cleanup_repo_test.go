@@ -585,3 +585,46 @@ func TestBuildUsageCleanupWhereModelEmpty(t *testing.T) {
 	require.Equal(t, "created_at >= $1 AND created_at <= $2", where)
 	require.Equal(t, []any{start, end}, args)
 }
+
+// TestDropOldestUsageLogRequestBodyPartition_SetsAndResetsLockTimeout 钉住维护连接的语句序列。
+// lock_timeout 必须设上（分区 DDL 要父表 ACCESS EXCLUSIVE 锁，排队会堵住所有写入），
+// 且必须 RESET —— 连接会归还连接池，会话级设置泄漏到普通查询上就麻烦了。
+func TestDropOldestUsageLogRequestBodyPartition_SetsAndResetsLockTimeout(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := newUsageCleanupRepositoryWithSQL(nil, db)
+
+	mock.ExpectQuery("SELECT pg_try_advisory_lock").
+		WithArgs(usageLogRequestBodyMaintenanceLockID).
+		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(true))
+	mock.ExpectExec("SET lock_timeout = '5s'").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("FROM pg_inherits").
+		WillReturnRows(sqlmock.NewRows([]string{"relname"}).AddRow("usage_log_request_bodies_20240101"))
+	mock.ExpectExec(`DROP TABLE IF EXISTS "usage_log_request_bodies_20240101"`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("RESET lock_timeout").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("SELECT pg_advisory_unlock").
+		WithArgs(usageLogRequestBodyMaintenanceLockID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	dropped, err := repo.DropOldestUsageLogRequestBodyPartition(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "usage_log_request_bodies_20240101", dropped)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 锁被其他实例持有时不碰 lock_timeout，也不执行任何 DDL。
+func TestDropOldestUsageLogRequestBodyPartition_SkipsWhenLockHeld(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := newUsageCleanupRepositoryWithSQL(nil, db)
+
+	mock.ExpectQuery("SELECT pg_try_advisory_lock").
+		WithArgs(usageLogRequestBodyMaintenanceLockID).
+		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(false))
+
+	dropped, err := repo.DropOldestUsageLogRequestBodyPartition(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, dropped)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

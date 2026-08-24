@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/robfig/cron/v3"
+	"github.com/shirou/gopsutil/v4/disk"
 )
 
 const (
@@ -24,6 +25,13 @@ const (
 	defaultUsageRequestBodyMaintenanceSchedule = "17 3 * * *"
 	defaultUsageRequestBodyRetentionDays       = 7
 	usageRequestBodyMaintenanceCronStopTimeout = 3 * time.Second
+
+	usageRequestBodyDiskGuardWorkerName  = "usage_request_body_disk_guard"
+	defaultUsageRequestBodyDiskGuardPath = "/"
+	// ponytail: 固定 5 分钟巡检。写入速度快到 5 分钟就能填满剩余 10% 磁盘时才需要做成配置项。
+	usageRequestBodyDiskGuardInterval = 5 * time.Minute
+	// 单轮最多连续 DROP 的分区数，防止磁盘探测异常时把分区全删光。
+	usageRequestBodyDiskGuardMaxDrops = 3
 )
 
 // UsageCleanupService 负责创建与执行使用记录清理任务
@@ -42,6 +50,9 @@ type UsageCleanupService struct {
 
 	workerCtx    context.Context
 	workerCancel context.CancelFunc
+
+	// diskFreePercent 为空时使用真实磁盘探测，仅测试注入。
+	diskFreePercent func(path string) (float64, error)
 }
 
 var usageRequestBodyMaintenanceCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
@@ -93,17 +104,27 @@ func (s *UsageCleanupService) Start() {
 	if s == nil {
 		return
 	}
-	if s.cfg != nil && !s.cfg.UsageCleanup.Enabled {
-		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] not started (disabled)")
-		return
-	}
 	if s.repo == nil || s.timingWheel == nil {
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] not started (missing deps)")
 		return
 	}
 
-	interval := s.workerInterval()
 	s.startOnce.Do(func() {
+		// disk guard 与清理任务执行器相互独立：usage_cleanup.enabled=false 时它仍然生效，
+		// 只由 request_body_disk_guard_percent 控制开关。
+		if threshold := s.requestBodyDiskGuardPercent(); threshold > 0 {
+			s.timingWheel.ScheduleRecurring(usageRequestBodyDiskGuardWorkerName, usageRequestBodyDiskGuardInterval, s.runRequestBodyDiskGuard)
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] scheduled (interval=%s path=%s free_threshold=%d%%)", usageRequestBodyDiskGuardInterval, s.requestBodyDiskGuardPath(), threshold)
+		} else {
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] not started (disabled)")
+		}
+
+		if s.cfg != nil && !s.cfg.UsageCleanup.Enabled {
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] not started (disabled)")
+			return
+		}
+
+		interval := s.workerInterval()
 		s.timingWheel.ScheduleRecurring(usageCleanupWorkerName, interval, s.runOnce)
 		if err := s.startRequestBodyMaintenanceCron(); err != nil {
 			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyMaintenance] not started: %v", err)
@@ -122,6 +143,7 @@ func (s *UsageCleanupService) Stop() {
 		}
 		if s.timingWheel != nil {
 			s.timingWheel.Cancel(usageCleanupWorkerName)
+			s.timingWheel.Cancel(usageRequestBodyDiskGuardWorkerName)
 		}
 		s.stopRequestBodyMaintenanceCron()
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] stopped")
@@ -294,6 +316,115 @@ func (s *UsageCleanupService) runRequestBodyMaintenance() {
 		return
 	}
 	logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyMaintenance] done: duration=%s", time.Since(start))
+}
+
+func (s *UsageCleanupService) requestBodyDiskGuardPercent() int {
+	if s == nil || s.cfg == nil {
+		return 0
+	}
+	if s.cfg.UsageCleanup.RequestBodyDiskGuardPercent <= 0 || s.cfg.UsageCleanup.RequestBodyDiskGuardPercent >= 100 {
+		return 0
+	}
+	return s.cfg.UsageCleanup.RequestBodyDiskGuardPercent
+}
+
+func (s *UsageCleanupService) requestBodyDiskGuardPath() string {
+	if s == nil || s.cfg == nil {
+		return defaultUsageRequestBodyDiskGuardPath
+	}
+	if path := strings.TrimSpace(s.cfg.UsageCleanup.RequestBodyDiskGuardPath); path != "" {
+		return path
+	}
+	return defaultUsageRequestBodyDiskGuardPath
+}
+
+func (s *UsageCleanupService) readDiskFreePercent(path string) (float64, error) {
+	if s != nil && s.diskFreePercent != nil {
+		return s.diskFreePercent(path)
+	}
+	return diskFreePercent(path)
+}
+
+// diskFreePercent 返回 path 所在文件系统的剩余空间百分比。
+// ponytail: 只能看到本进程可见的文件系统。PostgreSQL 若在独立主机/独立卷上，
+// 需把 usage_cleanup.request_body_disk_guard_path 指向同一块盘，否则把阈值设为 0 关掉本功能。
+func diskFreePercent(path string) (float64, error) {
+	usage, err := disk.Usage(path)
+	if err != nil {
+		return 0, err
+	}
+	if usage == nil || usage.Total == 0 {
+		return 0, fmt.Errorf("disk usage unavailable for %q", path)
+	}
+	return float64(usage.Free) / float64(usage.Total) * 100, nil
+}
+
+// runRequestBodyDiskGuard 剩余磁盘低于阈值时，逐天 DROP 最早的 request_body 分区直到回到阈值以上。
+// DROP TABLE 立即释放文件，不需要 VACUUM。
+func (s *UsageCleanupService) runRequestBodyDiskGuard() {
+	svc := s
+	if svc == nil || svc.repo == nil {
+		return
+	}
+	threshold := svc.requestBodyDiskGuardPercent()
+	if threshold <= 0 {
+		return
+	}
+	path := svc.requestBodyDiskGuardPath()
+
+	free, err := svc.readDiskFreePercent(path)
+	if err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] disk probe failed: path=%s err=%v", path, err)
+		return
+	}
+	if free >= float64(threshold) {
+		slog.Debug("[UsageRequestBodyDiskGuard] skip", "path", path, "free_percent", free, "threshold_percent", threshold)
+		return
+	}
+
+	// 与日常分区滚动共用同一把进程内互斥标记，避免并发 DDL。
+	if !atomic.CompareAndSwapInt32(&svc.requestBodyRunning, 0, 1) {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] run skipped: already_running=true free=%.1f%%", free)
+		return
+	}
+	defer atomic.StoreInt32(&svc.requestBodyRunning, 0)
+
+	parent := context.Background()
+	if svc.workerCtx != nil {
+		parent = svc.workerCtx
+	}
+	ctx, cancel := context.WithTimeout(parent, svc.taskTimeout())
+	defer cancel()
+
+	logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] triggered: path=%s free=%.1f%% threshold=%d%%", path, free, threshold)
+
+	for i := 0; i < usageRequestBodyDiskGuardMaxDrops; i++ {
+		dropped, err := svc.repo.DropOldestUsageLogRequestBodyPartition(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] interrupted: err=%v", err)
+				return
+			}
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] drop failed: err=%v", err)
+			return
+		}
+		if dropped == "" {
+			// 没有可删分区（只剩今天/未来分区），或锁被其他实例持有。
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] stopped: nothing_droppable=true free=%.1f%%", free)
+			return
+		}
+
+		free, err = svc.readDiskFreePercent(path)
+		if err != nil {
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] dropped %s but disk probe failed: err=%v", dropped, err)
+			return
+		}
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] partition dropped: table=%s free=%.1f%%", dropped, free)
+		if free >= float64(threshold) {
+			return
+		}
+	}
+	logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] drop limit reached: max_drops=%d free=%.1f%% threshold=%d%%", usageRequestBodyDiskGuardMaxDrops, free, threshold)
 }
 
 func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanupTask) {
