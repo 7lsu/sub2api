@@ -28,14 +28,14 @@ func newSessionIDUsageLog(sessionID *string) *service.UsageLog {
 	}
 }
 
-// sessionIDArgOffset：尾部固定三个参数依次为 session_id、created_at、
-// request_body（fork 专用，只写分区子表 usage_log_request_bodies）。
-const sessionIDArgOffset = 3
+// sessionIDArgOffset：尾部固定四个参数依次为 session_id、native_compaction_v2、
+// created_at、request_body（fork 专用，只写分区子表 usage_log_request_bodies）。
+const sessionIDArgOffset = 4
 
 // TestPrepareUsageLogInsert_SessionIDArgWiring pins the session_id column to the
 // arg slice / arg-type table so the five INSERT column lists stay in sync.
 func TestPrepareUsageLogInsert_SessionIDArgWiring(t *testing.T) {
-	require.Len(t, usageLogInsertArgTypes, 60, "arg-type table must include session_id and the fork request_body tail arg")
+	require.Len(t, usageLogInsertArgTypes, 62, "arg-type table must include session_id, native_compaction_v2 and the fork request_body tail arg")
 
 	sessionID := "sess-persisted-123"
 	prepared := prepareUsageLogInsert(newSessionIDUsageLog(&sessionID))
@@ -49,10 +49,13 @@ func TestPrepareUsageLogInsert_SessionIDArgWiring(t *testing.T) {
 	require.True(t, ns.Valid)
 	require.Equal(t, sessionID, ns.String)
 
+	// 尾部顺序钉死：session_id / native_compaction_v2 / created_at / fork request_body。
 	require.Equal(t, "text", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-sessionIDArgOffset],
 		"session_id arg type must be text")
+	require.Equal(t, "boolean", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-3],
+		"native_compaction_v2 arg type must be boolean")
 	require.Equal(t, "timestamptz", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-2],
-		"created_at must sit between session_id and the fork request_body tail arg")
+		"created_at must sit right before the fork request_body tail arg")
 }
 
 // TestPrepareUsageLogInsert_SessionIDNullWhenAbsent proves an absent session id is
@@ -70,9 +73,40 @@ func TestPrepareUsageLogInsert_SessionIDNullWhenAbsent(t *testing.T) {
 	require.False(t, nsEmpty.Valid, "empty session id must also be NULL")
 }
 
+func TestPrepareUsageLogInsert_RequestedReasoningEffortArgWiring(t *testing.T) {
+	requested := "max"
+	forwarded := "xhigh"
+	prepared := prepareUsageLogInsert(&service.UsageLog{
+		UserID:                   1,
+		APIKeyID:                 2,
+		AccountID:                3,
+		RequestID:                "req-requested-effort",
+		Model:                    "gpt-5.4",
+		ReasoningEffort:          &forwarded,
+		RequestedReasoningEffort: &requested,
+		CreatedAt:                time.Now().UTC(),
+	})
+
+	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
+	require.Equal(t, "text", usageLogInsertArgTypes[48], "requested_reasoning_effort must follow reasoning_effort")
+	require.Equal(t, "text", usageLogInsertArgTypes[47], "reasoning_effort arg type must stay text")
+
+	forwardedArg, ok := prepared.args[47].(sql.NullString)
+	require.True(t, ok)
+	require.True(t, forwardedArg.Valid)
+	require.Equal(t, forwarded, forwardedArg.String)
+
+	requestedArg, ok := prepared.args[48].(sql.NullString)
+	require.True(t, ok)
+	require.True(t, requestedArg.Valid)
+	require.Equal(t, requested, requestedArg.String)
+}
+
 // TestUsageLogInsertQueries_IncludeSessionID guards that every generated INSERT path
 // and the SELECT column list reference session_id.
 func TestUsageLogInsertQueries_IncludeSessionID(t *testing.T) {
+	require.Contains(t, usageLogSelectColumns, "requested_reasoning_effort",
+		"SELECT column list must include requested_reasoning_effort")
 	require.Contains(t, usageLogSelectColumns, "session_id",
 		"SELECT column list must include session_id")
 
@@ -84,6 +118,7 @@ func TestUsageLogInsertQueries_IncludeSessionID(t *testing.T) {
 	batchQuery, batchArgs := buildUsageLogBatchInsertQuery([]string{key},
 		map[string]usageLogInsertPrepared{key: prepared})
 	require.Contains(t, batchQuery, "session_id")
+	require.Contains(t, batchQuery, "requested_reasoning_effort")
 	// Two column references (INSERT column list + SELECT ... FROM input) plus the CTE def.
 	require.GreaterOrEqual(t, strings.Count(batchQuery, "session_id"), 3)
 	require.Len(t, batchArgs, len(prepared.args)+1,
