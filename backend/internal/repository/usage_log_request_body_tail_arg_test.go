@@ -19,7 +19,7 @@ import (
 // 的 $N::text，而 $N 已经变成别的列）。以下用例把「尾参必须在最后、且两条静态
 // SQL 都引用同一个编号」钉死。
 
-const usageLogColumnCount = 61 // usage_logs 实际列数，不含 fork 尾参
+const usageLogColumnCount = 62 // usage_logs 实际列数，不含 fork 尾参
 
 func newTailArgUsageLog(body *string) *service.UsageLog {
 	return &service.UsageLog{
