@@ -42,7 +42,9 @@ func requireStaticInsertMatchesArgTypes(t *testing.T, query string) {
 	m := usageLogStaticInsertShapeRe.FindStringSubmatch(query)
 	require.Len(t, m, 3, "unrecognised INSERT shape:\n%s", query)
 
-	want := len(usageLogInsertArgTypes)
+	// fork: 参数表末尾的 request_body 不是 usage_logs 的列，只喂给写分区子表的 CTE，
+	// 因此主表列数 / 占位符数都要扣掉这些尾参。
+	want := len(usageLogInsertArgTypes) - usageLogForkTailArgCount
 	columns := 0
 	for _, col := range strings.Split(m[1], ",") {
 		if strings.TrimSpace(col) != "" {
@@ -129,7 +131,8 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 	})
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 
-	idx := len(prepared.args) - 4
+	// 上游布局里 upstream_request_id 是倒数第 4 个；fork 的尾参把它再往前推。
+	idx := len(prepared.args) - 4 - usageLogForkTailArgCount
 	arg, ok := prepared.args[idx].(sql.NullString)
 	require.True(t, ok, "upstream_request_id arg should be sql.NullString, got %T", prepared.args[idx])
 	require.True(t, arg.Valid)

@@ -28,15 +28,13 @@ func newSessionIDUsageLog(sessionID *string) *service.UsageLog {
 	}
 }
 
-// sessionIDArgOffset：尾部固定四个参数依次为 session_id、native_compaction_v2、
-// created_at、request_body（fork 专用，只写分区子表 usage_log_request_bodies）。
-const sessionIDArgOffset = 4
+// sessionIDArgOffset：上游布局里 session_id 后面固定跟 native_compaction_v2、created_at，
+// 即倒数第 3 个；fork 的 request_body 尾参把它再往前推。
+const sessionIDArgOffset = 3 + usageLogForkTailArgCount
 
 // TestPrepareUsageLogInsert_SessionIDArgWiring pins the session_id column to the
 // arg slice / arg-type table so the five INSERT column lists stay in sync.
 func TestPrepareUsageLogInsert_SessionIDArgWiring(t *testing.T) {
-	require.Len(t, usageLogInsertArgTypes, 62, "arg-type table must include session_id, native_compaction_v2 and the fork request_body tail arg")
-
 	sessionID := "sess-persisted-123"
 	prepared := prepareUsageLogInsert(newSessionIDUsageLog(&sessionID))
 

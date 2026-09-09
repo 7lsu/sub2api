@@ -19,7 +19,13 @@ import (
 // 的 $N::text，而 $N 已经变成别的列）。以下用例把「尾参必须在最后、且两条静态
 // SQL 都引用同一个编号」钉死。
 
-const usageLogColumnCount = 62 // usage_logs 实际列数，不含 fork 尾参
+// usageLogForkTailArgCount 是 fork 追加在参数表末尾、不属于 usage_logs 列的参数个数
+// （目前仅 request_body）。所有按尾部偏移定位参数的断言都必须基于它推导，不能写死数字：
+// 上游每加一列 usage_logs，写死的偏移会静默失准，守卫跟着漂就等于没有守卫。
+const usageLogForkTailArgCount = 1
+
+// usageLogColumnCount 是 usage_logs 实际列数，随参数表自动跟随。
+const usageLogColumnCount = len(usageLogInsertArgTypes) - usageLogForkTailArgCount
 
 func newTailArgUsageLog(body *string) *service.UsageLog {
 	return &service.UsageLog{
@@ -34,9 +40,9 @@ func TestUsageLogRequestBodyIsLastPreparedArg(t *testing.T) {
 	body := "BODY"
 	prepared := prepareUsageLogInsert(newTailArgUsageLog(&body))
 
-	require.Len(t, usageLogInsertArgTypes, usageLogColumnCount+1,
-		"arg-type 表 = usage_logs 列数 + fork request_body 尾参")
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
+	require.Equal(t, "text", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-1],
+		"参数表最后一项必须是 fork 的 request_body 尾参")
 
 	tail, ok := prepared.args[len(prepared.args)-1].(sql.NullString)
 	require.True(t, ok, "尾参类型应为 sql.NullString，实际 %T", prepared.args[len(prepared.args)-1])
