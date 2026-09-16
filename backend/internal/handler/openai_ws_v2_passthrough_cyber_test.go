@@ -27,7 +27,9 @@ type openAIWSPassthroughHandlerHarness struct {
 	apiKey         *service.APIKey
 }
 
-func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string, settings ...map[string]string) *openAIWSPassthroughHandlerHarness {
+// fork: opts 接受 map[string]string（设置覆盖）或 func(*OpenAIGatewayHandler, *service.APIKey)
+// （WS 拨号前改写 handler / key，供单 Key 并发上限测试使用）。
+func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string, opts ...any) *openAIWSPassthroughHandlerHarness {
 	t.Helper()
 	gatewayCache := testutil.NewRedisGatewayCache(t)
 
@@ -36,9 +38,17 @@ func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string, sett
 		service.SettingKeyCyberSessionBlockEnabled:    "true",
 		service.SettingKeyCyberSessionBlockTTLSeconds: "60",
 	}}
-	for _, overrides := range settings {
-		for key, value := range overrides {
-			settingRepo.values[key] = value
+	var configure []func(*OpenAIGatewayHandler, *service.APIKey)
+	for _, opt := range opts {
+		switch o := opt.(type) {
+		case map[string]string:
+			for key, value := range o {
+				settingRepo.values[key] = value
+			}
+		case func(*OpenAIGatewayHandler, *service.APIKey):
+			configure = append(configure, o)
+		default:
+			t.Fatalf("unsupported harness option %T", opt)
 		}
 	}
 	moderationRepo := &contentModerationHandlerTestRepo{}
@@ -104,6 +114,10 @@ func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string, sett
 	}
 	handlerDone := make(chan struct{})
 	router := gin.New()
+	h.apiKeyService = newConcurrencyTestAPIKeyService(apiKey)
+	for _, apply := range configure {
+		apply(h, apiKey)
+	}
 	router.Use(func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyAPIKey), apiKey)
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: apiKey.User.ID, Concurrency: 1})
