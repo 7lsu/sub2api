@@ -235,8 +235,8 @@ func TestAPIContracts(t *testing.T) {
 					"ip_blacklist": null,
 					"last_used_at": null,
 					"last_used_ip": null,
-						"current_concurrency": 0,
-						"concurrency_limit": 0,
+					"current_concurrency": 0,
+					"concurrency_limit": 0,
 					"quota": 0,
 					"quota_used": 0,
 					"rate_limit_5h": 0,
@@ -1532,6 +1532,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	v1Keys.Use(jwtAuth)
 	v1Keys.GET("/keys", apiKeyHandler.List)
 	v1Keys.POST("/keys", apiKeyHandler.Create)
+	v1Keys.PUT("/keys/:id", apiKeyHandler.Update)
 	v1Keys.GET("/groups/available", apiKeyHandler.GetAvailableGroups)
 
 	v1Usage := v1.Group("")

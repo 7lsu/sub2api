@@ -764,7 +764,6 @@ export interface ApiKey {
 }
 
 export interface CreateApiKeyRequest {
-  concurrency_limit?: number // 0 adds no key-level limit; user limits still apply.
   name: string
   group_id?: number | null
   custom_key?: string // Optional custom API Key
@@ -778,7 +777,6 @@ export interface CreateApiKeyRequest {
 }
 
 export interface UpdateApiKeyRequest {
-  concurrency_limit?: number // 0 adds no key-level limit; user limits still apply.
   name?: string
   group_id?: number | null
   status?: 'active' | 'inactive'
