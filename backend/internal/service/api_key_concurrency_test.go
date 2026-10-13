@@ -136,3 +136,17 @@ func TestKeepAPIKeySlot_ContextCancelReleasesSlot(t *testing.T) {
 	_, releases := cache.counts()
 	require.Equal(t, 1, releases, "explicit release after cancellation must not release twice")
 }
+
+func TestAcquireAPIKeySlot_CancelledContextOnlyRejectsLimitedKeys(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc := &ConcurrencyService{}
+
+	release, err := svc.AcquireAPIKeySlot(ctx, 1, 0, nil)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	release()
+
+	_, err = svc.AcquireAPIKeySlot(ctx, 1, 2, nil)
+	require.ErrorIs(t, err, context.Canceled)
+}

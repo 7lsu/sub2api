@@ -27,8 +27,11 @@ func (s *ConcurrencyService) AcquireAPIKeySlot(ctx context.Context, apiKeyID int
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	// fork: 不限额的 Key 只做统计，与 TrackAPIKeySlot 一样不因请求已取消而拒绝准入。
+	if limit > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 	}
 	var cache APIKeyConcurrencyLimiter
 	if s != nil {
