@@ -2638,11 +2638,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	acquireUserForKey := func() (func(), bool, error) {
 		limit := apiKey.ConcurrencyLimit
 		if h.apiKeyService != nil {
+			// fork: 与上游每轮分组刷新同一策略 —— 重取失败沿用建连快照，不断连。
 			latest, err := h.apiKeyService.GetByKey(ctx, apiKey.Key)
-			if err != nil {
-				return nil, false, err
+			if err == nil && latest != nil && latest.ID == apiKey.ID {
+				limit = latest.ConcurrencyLimit
+			} else if err != nil {
+				reqLog.Warn("openai.websocket_key_limit_refresh_failed", zap.Error(err))
 			}
-			limit = latest.ConcurrencyLimit
 		}
 		return h.concurrencyHelper.TryAcquireUserSlotForAPIKey(ctx, subject.UserID, subject.Concurrency, apiKey.ID, limit, cancelConcurrency)
 	}

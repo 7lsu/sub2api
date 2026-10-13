@@ -89,8 +89,14 @@ func keepAPIKeySlot(ctx context.Context, cache APIKeyConcurrencyLimiter, apiKeyI
 				refreshCtx, cancel := context.WithTimeout(ctx, apiKeySlotTrackTimeout)
 				owned, err := cache.RefreshAPIKeySlot(refreshCtx, apiKeyID, requestID)
 				cancel()
-				if err != nil || !owned {
-					logger.LegacyPrintf("service.concurrency", "API key slot lease lost: key_id=%d owned=%t error=%v", apiKeyID, owned, err)
+				if err != nil {
+					// fork: 瞬时错误不判定丢租约。槽位 TTL 远长于续期间隔，下一轮重试即可；
+					// 若 Redis 长时间不可用导致槽位真正过期，恢复后的续期会返回 !owned。
+					logger.LegacyPrintf("service.concurrency", "API key slot refresh failed, retrying: key_id=%d error=%v", apiKeyID, err)
+					continue
+				}
+				if !owned {
+					logger.LegacyPrintf("service.concurrency", "API key slot lease lost: key_id=%d", apiKeyID)
 					if enforce && onLeaseLost != nil {
 						onLeaseLost()
 					}

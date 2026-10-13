@@ -3074,7 +3074,11 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		apiKey.Group = tc.group
 	}
 	router := gin.New()
-	h.apiKeyService = newConcurrencyTestAPIKeyService(apiKey)
+	// fork: 单 Key 并发上限每轮经 GetByKey 重读限额，空壳 APIKeyService 会 nil panic；
+	// 但用例自带 apiKeyService 时（上游分组调价测试）必须保留，否则每轮刷新查的不是用例的仓库。
+	if tc.apiKeyService == nil {
+		h.apiKeyService = newConcurrencyTestAPIKeyService(apiKey)
+	}
 	router.Use(func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyAPIKey), apiKey)
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: apiKey.User.ID, Concurrency: 1})
