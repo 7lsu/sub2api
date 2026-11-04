@@ -933,12 +933,43 @@ func newDiskGuardService(repo *cleanupRepoStub, thresholdPercent int, freeSeries
 	return svc
 }
 
-func TestRequestBodyDiskGuardDropsUntilAboveThreshold(t *testing.T) {
+// 每轮最多删一天：删完仍低于阈值也留到下一轮。
+func TestRequestBodyDiskGuardDropsOneDayPerRound(t *testing.T) {
 	repo := &cleanupRepoStub{droppablePartitions: []string{"usage_log_request_bodies_20240101", "usage_log_request_bodies_20240102", "usage_log_request_bodies_20240103"}}
-	// 探测序列：触发前 4%，DROP 一次后 7%（仍低于阈值），再 DROP 一次后 12%。
-	svc := newDiskGuardService(repo, 10, []float64{4, 7, 12})
+	// 触发前 4%，DROP 后 7%（仍低于阈值）。
+	svc := newDiskGuardService(repo, 10, []float64{4, 7})
 
 	svc.runRequestBodyDiskGuard()
+
+	require.Equal(t, []string{"usage_log_request_bodies_20240101"}, repo.droppedPartitions)
+}
+
+// 回归（2026-11-04）：删表腾不出足够空间时，旧版每轮连删 3 张，3 轮（10 分钟）删光 7 天历史。
+// 现在每轮只删一天，3 轮只删 3 天。
+func TestRequestBodyDiskGuardPersistentLowDiskIsRateLimited(t *testing.T) {
+	partitions := make([]string, 0, 7)
+	for d := 1; d <= 7; d++ {
+		partitions = append(partitions, fmt.Sprintf("usage_log_request_bodies_2024010%d", d))
+	}
+	repo := &cleanupRepoStub{droppablePartitions: partitions}
+	svc := newDiskGuardService(repo, 10, []float64{1})
+
+	for round := 0; round < 3; round++ {
+		svc.runRequestBodyDiskGuard()
+	}
+
+	require.Equal(t, partitions[:3], repo.droppedPartitions)
+}
+
+// 逐轮删到回到阈值以上就停。
+func TestRequestBodyDiskGuardStopsOnceRecovered(t *testing.T) {
+	repo := &cleanupRepoStub{droppablePartitions: []string{"usage_log_request_bodies_20240101", "usage_log_request_bodies_20240102", "usage_log_request_bodies_20240103"}}
+	// 第 1 轮：4% → 删 → 7%；第 2 轮：7% → 删 → 12%；第 3 轮：12% 不删。
+	svc := newDiskGuardService(repo, 10, []float64{4, 7, 7, 12, 12})
+
+	for round := 0; round < 3; round++ {
+		svc.runRequestBodyDiskGuard()
+	}
 
 	require.Equal(t, []string{"usage_log_request_bodies_20240101", "usage_log_request_bodies_20240102"}, repo.droppedPartitions)
 }
@@ -968,20 +999,6 @@ func TestRequestBodyDiskGuardDisabledWhenPercentZero(t *testing.T) {
 	svc.runRequestBodyDiskGuard()
 
 	require.Empty(t, repo.droppedPartitions)
-}
-
-func TestRequestBodyDiskGuardStopsAtMaxDrops(t *testing.T) {
-	partitions := make([]string, 0, usageRequestBodyDiskGuardMaxDrops+3)
-	for i := 0; i < usageRequestBodyDiskGuardMaxDrops+3; i++ {
-		partitions = append(partitions, fmt.Sprintf("usage_log_request_bodies_2024010%d", i))
-	}
-	repo := &cleanupRepoStub{droppablePartitions: partitions}
-	// 磁盘探测永远返回低水位（例如探测路径根本不是 DB 所在盘），必须被 max drops 兜住。
-	svc := newDiskGuardService(repo, 10, []float64{1})
-
-	svc.runRequestBodyDiskGuard()
-
-	require.Len(t, repo.droppedPartitions, usageRequestBodyDiskGuardMaxDrops)
 }
 
 // disk guard 不受 usage_cleanup.enabled 影响，只由 request_body_disk_guard_percent 控制。

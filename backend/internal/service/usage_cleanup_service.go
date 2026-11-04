@@ -30,8 +30,6 @@ const (
 	defaultUsageRequestBodyDiskGuardPath = "/"
 	// ponytail: 固定 5 分钟巡检。写入速度快到 5 分钟就能填满剩余 10% 磁盘时才需要做成配置项。
 	usageRequestBodyDiskGuardInterval = 5 * time.Minute
-	// 单轮最多连续 DROP 的分区数，防止磁盘探测异常时把分区全删光。
-	usageRequestBodyDiskGuardMaxDrops = 3
 )
 
 // UsageCleanupService 负责创建与执行使用记录清理任务
@@ -359,7 +357,9 @@ func diskFreePercent(path string) (float64, error) {
 	return float64(usage.Free) / float64(usage.Total) * 100, nil
 }
 
-// runRequestBodyDiskGuard 剩余磁盘低于阈值时，逐天 DROP 最早的 request_body 分区直到回到阈值以上。
+// runRequestBodyDiskGuard 剩余磁盘低于阈值时 DROP 最早一天的 request_body 分区，每轮（5 分钟）最多删一天，
+// 仍低于阈值就下一轮再删，直到回到阈值以上。限速是为了给人看到告警、手动处理的时间：
+// 删表腾不出足够空间时（压力在别处 / 探测盘不对），旧版每轮连删 3 张，10 分钟就删光 7 天历史。
 // DROP TABLE 立即释放文件，不需要 VACUUM。
 func (s *UsageCleanupService) runRequestBodyDiskGuard() {
 	svc := s
@@ -398,33 +398,30 @@ func (s *UsageCleanupService) runRequestBodyDiskGuard() {
 
 	logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] triggered: path=%s free=%.1f%% threshold=%d%%", path, free, threshold)
 
-	for i := 0; i < usageRequestBodyDiskGuardMaxDrops; i++ {
-		dropped, err := svc.repo.DropOldestUsageLogRequestBodyPartition(ctx)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] interrupted: err=%v", err)
-				return
-			}
-			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] drop failed: err=%v", err)
+	dropped, err := svc.repo.DropOldestUsageLogRequestBodyPartition(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] interrupted: err=%v", err)
 			return
 		}
-		if dropped == "" {
-			// 没有可删分区（只剩今天/未来分区），或锁被其他实例持有。
-			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] stopped: nothing_droppable=true free=%.1f%%", free)
-			return
-		}
-
-		free, err = svc.readDiskFreePercent(path)
-		if err != nil {
-			logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] dropped %s but disk probe failed: err=%v", dropped, err)
-			return
-		}
-		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] partition dropped: table=%s free=%.1f%%", dropped, free)
-		if free >= float64(threshold) {
-			return
-		}
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] drop failed: err=%v", err)
+		return
 	}
-	logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] drop limit reached: max_drops=%d free=%.1f%% threshold=%d%%", usageRequestBodyDiskGuardMaxDrops, free, threshold)
+	if dropped == "" {
+		// 没有可删分区（只剩今天/未来分区），或锁被其他实例持有。
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] stopped: nothing_droppable=true free=%.1f%%", free)
+		return
+	}
+
+	after, err := svc.readDiskFreePercent(path)
+	if err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] partition dropped: table=%s free_before=%.1f%% disk probe failed: err=%v", dropped, free, err)
+		return
+	}
+	logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] partition dropped: table=%s free_before=%.1f%% free_after=%.1f%% threshold=%d%%", dropped, free, after, threshold)
+	if after < float64(threshold) {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageRequestBodyDiskGuard] still below threshold, will drop the next oldest day in %s unless free space recovers: free=%.1f%% threshold=%d%%", usageRequestBodyDiskGuardInterval, after, threshold)
+	}
 }
 
 func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanupTask) {

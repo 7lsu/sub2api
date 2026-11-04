@@ -1811,7 +1811,7 @@ type UsageCleanupConfig struct {
 	RequestBodyMaintenanceSchedule string `mapstructure:"request_body_maintenance_schedule"`
 	// RequestBodyRetentionDays: request_body 分区保留天数，超期分区按天 DROP；0 表示只建不删
 	RequestBodyRetentionDays int `mapstructure:"request_body_retention_days"`
-	// RequestBodyDiskGuardPercent: 剩余磁盘低于该百分比时，逐天 DROP 最早的 request_body 分区；0 表示关闭
+	// RequestBodyDiskGuardPercent: 剩余磁盘低于该百分比时每 5 分钟 DROP 最早一天的 request_body 分区，直至回升；0 表示关闭
 	RequestBodyDiskGuardPercent int `mapstructure:"request_body_disk_guard_percent"`
 	// RequestBodyDiskGuardPath: 用于探测剩余磁盘的挂载点路径（应指向 PostgreSQL 数据目录所在文件系统）
 	RequestBodyDiskGuardPath string `mapstructure:"request_body_disk_guard_path"`
