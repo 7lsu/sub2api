@@ -213,11 +213,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 		return
 	}
 
-	out := make([]dto.AdminUsageLog, 0, len(records))
-	for i := range records {
-		out = append(out, *dto.UsageLogFromServiceAdmin(&records[i]))
-	}
-	response.Paginated(c, out, result.Total, page, pageSize)
+	response.Paginated(c, adminUsageLogResponses(c, records), result.Total, page, pageSize)
 }
 
 // GetRequestBody 返回单条 usage log 的完整 request_body，纯文本直写，不做 JSON 包装（单条可达数十 MB，避免转义再放大一份）。
