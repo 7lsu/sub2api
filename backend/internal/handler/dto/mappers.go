@@ -779,9 +779,9 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		AccountRateMultiplier:   l.AccountRateMultiplier,
 		AccountStatsCost:        l.AccountStatsCost,
 		IPAddress:               l.IPAddress,
-		// fork: request_body 仅在 admin DTO 暴露，普通用户 DTO 不含此字段
-		RequestBody: l.RequestBody,
-		Account:     AccountSummaryFromService(l.Account),
+		// fork: has_request_body 仅在 admin DTO 暴露，普通用户 DTO 不含此字段
+		HasRequestBody: l.HasRequestBody,
+		Account:        AccountSummaryFromService(l.Account),
 	}
 }
 

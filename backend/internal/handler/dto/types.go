@@ -706,8 +706,8 @@ type AdminUsageLog struct {
 	// IPAddress 用户请求 IP
 	IPAddress *string `json:"ip_address,omitempty"`
 
-	// RequestBody 完整请求体（仅管理员可见）
-	RequestBody *string `json:"request_body,omitempty"`
+	// HasRequestBody 是否采集到请求体（仅管理员可见）；body 本身走 GET /admin/usage/:id/request-body
+	HasRequestBody bool `json:"has_request_body"`
 
 	// Account 最小账号信息（避免泄露敏感字段）
 	Account *AccountSummary `json:"account,omitempty"`

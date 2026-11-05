@@ -459,6 +459,21 @@ func (s *UsageService) ListWithFiltersForAdmin(ctx context.Context, params pagin
 	return logs, result, nil
 }
 
+// GetRequestBodyForAdmin returns one captured request body; found=false when none was captured or its partition was dropped.
+func (s *UsageService) GetRequestBodyForAdmin(ctx context.Context, usageLogID int64) (body string, found bool, err error) {
+	repo, ok := s.usageRepo.(interface {
+		GetRequestBody(context.Context, int64) (string, bool, error)
+	})
+	if !ok {
+		return "", false, nil
+	}
+	body, found, err = repo.GetRequestBody(ctx, usageLogID)
+	if err != nil {
+		return "", false, fmt.Errorf("get usage log request body: %w", err)
+	}
+	return body, found, nil
+}
+
 // GetGlobalStats returns global usage stats for a time range.
 func (s *UsageService) GetGlobalStats(ctx context.Context, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
 	stats, err := s.usageRepo.GetGlobalStats(ctx, startTime, endTime)

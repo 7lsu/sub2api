@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -100,12 +101,12 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 	return r.listWithFilters(ctx, params, filters, false)
 }
 
-// ListWithFiltersForAdmin：admin 路径，LEFT JOIN 分区子表 usage_log_request_bodies 取回 request_body。
+// ListWithFiltersForAdmin：admin 路径，每行只带 has_request_body 标记；body 走 GetRequestBody 单条取。
 func (r *usageLogRepository) ListWithFiltersForAdmin(ctx context.Context, params pagination.PaginationParams, filters UsageLogFilters) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	return r.listWithFilters(ctx, params, filters, true)
 }
 
-func (r *usageLogRepository) listWithFilters(ctx context.Context, params pagination.PaginationParams, filters UsageLogFilters, includeRequestBody bool) ([]service.UsageLog, *pagination.PaginationResult, error) {
+func (r *usageLogRepository) listWithFilters(ctx context.Context, params pagination.PaginationParams, filters UsageLogFilters, withBodyFlag bool) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	conditions := make([]string, 0, 9)
 	args := make([]any, 0, 9)
 
@@ -156,9 +157,9 @@ func (r *usageLogRepository) listWithFilters(ctx context.Context, params paginat
 		err  error
 	)
 	if shouldUseFastUsageLogTotal(filters) {
-		logs, page, err = r.listUsageLogsWithFastPagination(ctx, whereClause, args, params, includeRequestBody)
+		logs, page, err = r.listUsageLogsWithFastPagination(ctx, whereClause, args, params, withBodyFlag)
 	} else {
-		logs, page, err = r.listUsageLogsWithPagination(ctx, whereClause, args, params, includeRequestBody)
+		logs, page, err = r.listUsageLogsWithPagination(ctx, whereClause, args, params, withBodyFlag)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -186,25 +187,41 @@ func shouldUseFastUsageLogTotal(filters UsageLogFilters) bool {
 }
 
 // buildUsageLogListQuery 构造分页列表查询。
-// includeRequestBody=false（普通用户路径）：仅查 usage_logs，裸列名。
-// includeRequestBody=true（admin 路径）：request_body 已拆到分区子表 usage_log_request_bodies，
-// 故先在内层对 usage_logs 分页（裸列名零歧义、复用现有 where/order/scan），外层再 LEFT JOIN
-// 子表按 (request_id, api_key_id, created_at) 取回 request_body；外层列顺序 = 列清单 + request_body，
-// 与 scanUsageLogWithRequestBody 的 dest 顺序一致。
-func buildUsageLogListQuery(includeRequestBody bool, whereClause, orderBy string, limitPos, offsetPos int) string {
-	if !includeRequestBody {
+// withBodyFlag=false（普通用户路径）：仅查 usage_logs，裸列名。
+// withBodyFlag=true（admin 路径）：内层对 usage_logs 分页，外层只用 EXISTS 探分区子表主键，
+// 列顺序 = 列清单 + has_request_body，与 scanUsageLogWithBodyFlag 的 dest 顺序一致。
+// 绝不能在列表里取 request_body 本身：单条可达数十 MB，2026-11-05 一页 20 行 609MB 撑爆了容器。
+func buildUsageLogListQuery(withBodyFlag bool, whereClause, orderBy string, limitPos, offsetPos int) string {
+	if !withBodyFlag {
 		return fmt.Sprintf("SELECT %s FROM usage_logs %s ORDER BY %s LIMIT $%d OFFSET $%d",
 			usageLogSelectColumns, whereClause, orderBy, limitPos, offsetPos)
 	}
 	return fmt.Sprintf(
-		"SELECT base.*, b.request_body FROM ("+
+		"SELECT base.*, EXISTS (SELECT 1 FROM usage_log_request_bodies b "+
+			"WHERE b.request_id = base.request_id AND b.api_key_id = base.api_key_id AND b.created_at = base.created_at"+
+			") AS has_request_body FROM ("+
 			"SELECT %s FROM usage_logs %s ORDER BY %s LIMIT $%d OFFSET $%d"+
-			") base LEFT JOIN usage_log_request_bodies b "+
-			"ON b.request_id = base.request_id AND b.api_key_id = base.api_key_id AND b.created_at = base.created_at",
+			") base",
 		usageLogSelectColumns, whereClause, orderBy, limitPos, offsetPos)
 }
 
-func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams, includeRequestBody bool) ([]service.UsageLog, *pagination.PaginationResult, error) {
+// GetRequestBody 按 usage log id 取单条 request_body；未采集或所在分区已被删时 found=false。
+func (r *usageLogRepository) GetRequestBody(ctx context.Context, usageLogID int64) (body string, found bool, err error) {
+	err = scanSingleRow(ctx, r.sql,
+		"SELECT b.request_body FROM usage_logs u JOIN usage_log_request_bodies b "+
+			"ON b.request_id = u.request_id AND b.api_key_id = u.api_key_id AND b.created_at = u.created_at "+
+			"WHERE u.id = $1",
+		[]any{usageLogID}, &body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return body, true, nil
+}
+
+func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams, withBodyFlag bool) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	countQuery := "SELECT COUNT(*) FROM usage_logs " + whereClause
 	var total int64
 	if err := scanSingleRow(ctx, r.sql, countQuery, args, &total); err != nil {
@@ -214,24 +231,24 @@ func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, wh
 	limitPos := len(args) + 1
 	offsetPos := len(args) + 2
 	listArgs := append(append([]any{}, args...), params.Limit(), params.Offset())
-	query := buildUsageLogListQuery(includeRequestBody, whereClause, usageLogOrderBy(params), limitPos, offsetPos)
-	logs, err := r.queryUsageLogs(ctx, includeRequestBody, query, listArgs...)
+	query := buildUsageLogListQuery(withBodyFlag, whereClause, usageLogOrderBy(params), limitPos, offsetPos)
+	logs, err := r.queryUsageLogs(ctx, withBodyFlag, query, listArgs...)
 	if err != nil {
 		return nil, nil, err
 	}
 	return logs, paginationResultFromTotal(total, params), nil
 }
 
-func (r *usageLogRepository) listUsageLogsWithFastPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams, includeRequestBody bool) ([]service.UsageLog, *pagination.PaginationResult, error) {
+func (r *usageLogRepository) listUsageLogsWithFastPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams, withBodyFlag bool) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	limit := params.Limit()
 	offset := params.Offset()
 
 	limitPos := len(args) + 1
 	offsetPos := len(args) + 2
 	listArgs := append(append([]any{}, args...), limit+1, offset)
-	query := buildUsageLogListQuery(includeRequestBody, whereClause, usageLogOrderBy(params), limitPos, offsetPos)
+	query := buildUsageLogListQuery(withBodyFlag, whereClause, usageLogOrderBy(params), limitPos, offsetPos)
 
-	logs, err := r.queryUsageLogs(ctx, includeRequestBody, query, listArgs...)
+	logs, err := r.queryUsageLogs(ctx, withBodyFlag, query, listArgs...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -271,7 +288,7 @@ func usageLogOrderBy(params pagination.PaginationParams) string {
 	return fmt.Sprintf("%s %s, id %s", column, sortOrder, sortOrder)
 }
 
-func (r *usageLogRepository) queryUsageLogs(ctx context.Context, includeRequestBody bool, query string, args ...any) (logs []service.UsageLog, err error) {
+func (r *usageLogRepository) queryUsageLogs(ctx context.Context, withBodyFlag bool, query string, args ...any) (logs []service.UsageLog, err error) {
 	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -288,7 +305,7 @@ func (r *usageLogRepository) queryUsageLogs(ctx context.Context, includeRequestB
 	logs = make([]service.UsageLog, 0)
 	for rows.Next() {
 		var log *service.UsageLog
-		log, err = scanUsageLogWithRequestBody(rows, includeRequestBody)
+		log, err = scanUsageLogWithBodyFlag(rows, withBodyFlag)
 		if err != nil {
 			return nil, err
 		}
@@ -467,14 +484,13 @@ func (r *usageLogRepository) loadSubscriptions(ctx context.Context, ids []int64)
 }
 
 func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, error) {
-	return scanUsageLogWithRequestBody(scanner, false)
+	return scanUsageLogWithBodyFlag(scanner, false)
 }
 
-// scanUsageLogWithRequestBody：includeRequestBody=true 时行末多扫一列 request_body
-// （来自 admin 路径对分区子表 usage_log_request_bodies 的 LEFT JOIN）。
-func scanUsageLogWithRequestBody(scanner interface{ Scan(...any) error }, includeRequestBody bool) (*service.UsageLog, error) {
+// scanUsageLogWithBodyFlag：withBodyFlag=true 时行末多扫一列 has_request_body（admin 列表路径）。
+func scanUsageLogWithBodyFlag(scanner interface{ Scan(...any) error }, withBodyFlag bool) (*service.UsageLog, error) {
 	var (
-		requestBody               sql.NullString
+		hasRequestBody            bool
 		id                        int64
 		userID                    int64
 		apiKeyID                  int64
@@ -605,8 +621,8 @@ func scanUsageLogWithRequestBody(scanner interface{ Scan(...any) error }, includ
 		&nativeCompactionV2,
 		&createdAt,
 	}
-	if includeRequestBody {
-		dest = append(dest, &requestBody)
+	if withBodyFlag {
+		dest = append(dest, &hasRequestBody)
 	}
 	if err := scanner.Scan(dest...); err != nil {
 		return nil, err
@@ -744,9 +760,7 @@ func scanUsageLogWithRequestBody(scanner interface{ Scan(...any) error }, includ
 	if upstreamRequestID.Valid {
 		log.UpstreamRequestID = &upstreamRequestID.String
 	}
-	if includeRequestBody && requestBody.Valid {
-		log.RequestBody = &requestBody.String
-	}
+	log.HasRequestBody = hasRequestBody
 
 	return log, nil
 }

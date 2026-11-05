@@ -153,6 +153,8 @@ type UsageLog struct {
 	UpstreamEndpoint *string
 
 	RequestBody *string
+	// fork: admin 列表只带是否有 body 的标记，body 本身走 GetRequestBodyForAdmin 单条懒加载
+	HasRequestBody bool
 
 	GroupID        *int64
 	SubscriptionID *int64

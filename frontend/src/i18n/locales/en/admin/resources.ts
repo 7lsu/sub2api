@@ -563,7 +563,8 @@ export default {
         column: 'Request Body',
         title: 'Request Body',
         view: 'View',
-        empty: 'No request body'
+        empty: 'No request body',
+        loadFailed: 'Failed to load request body'
       },
       tokenRanking: {
         subtitle: 'Per-user token usage for the current filters and time range',

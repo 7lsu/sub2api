@@ -220,6 +220,29 @@ func (h *UsageHandler) List(c *gin.Context) {
 	response.Paginated(c, out, result.Total, page, pageSize)
 }
 
+// GetRequestBody 返回单条 usage log 的完整 request_body，纯文本直写，不做 JSON 包装（单条可达数十 MB，避免转义再放大一份）。
+// GET /api/v1/admin/usage/:id/request-body；未采集或分区已删返回 204。
+func (h *UsageHandler) GetRequestBody(c *gin.Context) {
+	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid usage log id")
+		return
+	}
+	body, found, err := h.usageService.GetRequestBodyForAdmin(c.Request.Context(), id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	if !found {
+		c.Status(http.StatusNoContent)
+		return
+	}
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.Status(http.StatusOK)
+	_, _ = c.Writer.WriteString(body)
+}
+
 // Stats handles getting usage statistics with filters
 // GET /api/v1/admin/usage/stats
 func (h *UsageHandler) Stats(c *gin.Context) {

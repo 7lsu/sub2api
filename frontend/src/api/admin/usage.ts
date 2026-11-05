@@ -112,6 +112,18 @@ export async function list(
 }
 
 /**
+ * Get one captured request body as raw text (admin only).
+ * The list never carries bodies: a single one can be tens of MB. Empty string = not captured (204).
+ */
+export async function getRequestBody(id: number, options?: { signal?: AbortSignal }): Promise<string> {
+  const { data } = await apiClient.get<string>(`/admin/usage/${id}/request-body`, {
+    responseType: 'text',
+    signal: options?.signal
+  })
+  return typeof data === 'string' ? data : ''
+}
+
+/**
  * Get usage statistics with optional filters (admin only)
  * @param params - Query parameters for filtering
  * @returns Usage statistics
@@ -209,6 +221,7 @@ export async function cancelCleanupTask(taskId: number): Promise<{ id: number; s
 
 export const adminUsageAPI = {
   list,
+  getRequestBody,
   getStats,
   searchUsers,
   searchApiKeys,

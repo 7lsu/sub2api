@@ -560,7 +560,8 @@ export default {
         column: '请求体',
         title: '请求体',
         view: '查看',
-        empty: '暂无请求体'
+        empty: '暂无请求体',
+        loadFailed: '请求体加载失败'
       },
       tokenRanking: {
         subtitle: '按当前筛选与时间范围统计每个用户的 Token 用量',

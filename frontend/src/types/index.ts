@@ -1857,8 +1857,8 @@ export interface AdminUsageLog extends UsageLog {
   channel_id?: number | null
   billing_tier?: string | null
 
-  // 完整请求体（仅管理员可见）
-  request_body?: string | null
+  // 是否采集到请求体（仅管理员可见）；body 本身点开时用 adminUsageAPI.getRequestBody 单条取
+  has_request_body?: boolean
 
   // 最小账号信息（仅管理员接口返回）
   account?: UsageLogAccountSummary

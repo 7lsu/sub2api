@@ -309,7 +309,7 @@
 
         <template #cell-request_body="{ row }">
           <button
-            v-if="row.request_body"
+            v-if="row.has_request_body"
             type="button"
             class="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-primary-600 transition-colors hover:bg-primary-50 hover:text-primary-700 dark:text-primary-400 dark:hover:bg-primary-900/30 dark:hover:text-primary-300"
             :title="t('admin.usage.requestBody.view')"
@@ -349,7 +349,10 @@
         </button>
       </div>
 
-      <div v-if="selectedRequestBodyParsed.ok" class="overflow-hidden rounded border border-gray-200 bg-white dark:border-dark-600 dark:bg-dark-800">
+      <div v-if="requestBodyLoading" class="py-10 text-center text-sm text-gray-500 dark:text-gray-400">
+        {{ t('common.loading') }}
+      </div>
+      <div v-else-if="selectedRequestBodyParsed.ok" class="overflow-hidden rounded border border-gray-200 bg-white dark:border-dark-600 dark:bg-dark-800">
         <JsonEditorVue
           ref="requestBodyEditorRef"
           :model-value="selectedRequestBodyParsed.value"
@@ -643,6 +646,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
+import { adminUsageAPI } from '@/api/admin/usage'
 import { fetchBatch, getEntry } from '@/utils/ipGeoLookup'
 import type { AdminUsageLog } from '@/types'
 import type { Column } from '@/components/common/types'
@@ -764,6 +768,8 @@ const requestBodyDialogVisible = ref(false)
 const selectedRequestBodyRow = ref<AdminUsageLog | null>(null)
 const selectedRequestBodyText = ref('')
 const selectedRequestBodyParsed = ref<{ ok: true; value: unknown } | { ok: false }>({ ok: false })
+const requestBodyLoading = ref(false)
+let requestBodyAbort: AbortController | null = null
 const jsonEditorMode = Mode.tree
 const requestBodyEditorRef = ref<unknown>(null)
 
@@ -822,18 +828,37 @@ const expandRequestBodyJson = async () => {
   }, 0)
 }
 
-const openRequestBody = (row: AdminUsageLog) => {
-  const body = row.request_body || ''
+const openRequestBody = async (row: AdminUsageLog) => {
+  requestBodyAbort?.abort()
+  const controller = new AbortController()
+  requestBodyAbort = controller
   selectedRequestBodyRow.value = row
-  selectedRequestBodyText.value = body
-  selectedRequestBodyParsed.value = parseRequestBody(body)
+  selectedRequestBodyText.value = ''
+  selectedRequestBodyParsed.value = { ok: false }
+  requestBodyLoading.value = true
   requestBodyDialogVisible.value = true
-  if (selectedRequestBodyParsed.value.ok) {
-    void expandRequestBodyJson()
+  try {
+    const body = await adminUsageAPI.getRequestBody(row.id, { signal: controller.signal })
+    if (controller.signal.aborted) return
+    selectedRequestBodyText.value = body
+    selectedRequestBodyParsed.value = parseRequestBody(body)
+    if (selectedRequestBodyParsed.value.ok) {
+      void expandRequestBodyJson()
+    }
+  } catch {
+    if (!controller.signal.aborted) appStore.showError(t('admin.usage.requestBody.loadFailed'))
+  } finally {
+    if (requestBodyAbort === controller) {
+      requestBodyAbort = null
+      requestBodyLoading.value = false
+    }
   }
 }
 
 const closeRequestBody = () => {
+  requestBodyAbort?.abort()
+  requestBodyAbort = null
+  requestBodyLoading.value = false
   requestBodyDialogVisible.value = false
   selectedRequestBodyRow.value = null
   selectedRequestBodyText.value = ''
