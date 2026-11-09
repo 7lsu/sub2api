@@ -28,9 +28,9 @@ func newSessionIDUsageLog(sessionID *string) *service.UsageLog {
 	}
 }
 
-// sessionIDArgOffset：上游布局里 session_id 后面固定跟 native_compaction_v2、created_at，
-// 即倒数第 3 个；fork 的 request_body 尾参把它再往前推。
-const sessionIDArgOffset = 3 + usageLogForkTailArgCount
+// sessionIDArgOffset：上游布局里 session_id 后面固定跟 native_compaction_v2、两个 cache_creation 分桶、created_at，
+// 即倒数第 5 个；fork 的 request_body 尾参把它再往前推。
+const sessionIDArgOffset = 5 + usageLogForkTailArgCount
 
 // TestPrepareUsageLogInsert_SessionIDArgWiring pins the session_id column to the
 // arg slice / arg-type table so the five INSERT column lists stay in sync.
@@ -47,10 +47,10 @@ func TestPrepareUsageLogInsert_SessionIDArgWiring(t *testing.T) {
 	require.True(t, ns.Valid)
 	require.Equal(t, sessionID, ns.String)
 
-	// 尾部顺序钉死：session_id / native_compaction_v2 / created_at / fork request_body。
+	// 尾部顺序钉死：session_id / native_compaction_v2 / cache_creation_30m / cache_creation_12h / created_at / fork request_body。
 	require.Equal(t, "text", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-sessionIDArgOffset],
 		"session_id arg type must be text")
-	require.Equal(t, "boolean", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-3],
+	require.Equal(t, "boolean", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-4-usageLogForkTailArgCount],
 		"native_compaction_v2 arg type must be boolean")
 	require.Equal(t, "timestamptz", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-2],
 		"created_at must sit right before the fork request_body tail arg")

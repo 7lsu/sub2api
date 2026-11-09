@@ -71,16 +71,17 @@ func TestUsageLogBatchQueriesKeepRequestBodyLast(t *testing.T) {
 	assertUsageLogInputList(t, "best-effort", bestEffortQuery)
 }
 
-// assertUsageLogInputList 校验 CTE 输入列表尾部四列顺序，返回完整列名切片。
+// assertUsageLogInputList 只钉 fork 关心的尾部两列，返回完整列名切片。
+// 不枚举上游列：上游每加一列都要来改这里的话，守卫就会跟着漂。body_ins 用
+// ins.created_at 写子表，所以 created_at 必须紧贴 request_body 之前。
 func assertUsageLogInputList(t *testing.T, name, query string) []string {
 	t.Helper()
 	m := usageLogInputListRe.FindStringSubmatch(query)
 	require.NotNil(t, m, "%s: 找不到 WITH input (...) 列清单", name)
 	cols := usageLogColumnRe.FindAllString(m[1], -1)
 
-	tail := cols[len(cols)-4:]
-	require.Equal(t, []string{"session_id", "native_compaction_v2", "created_at", "request_body"}, tail,
-		"%s: CTE 输入列尾部顺序必须与 usageLogInsertArgTypes 一致", name)
+	require.Equal(t, []string{"created_at", "request_body"}, cols[len(cols)-2:],
+		"%s: CTE 输入列尾部必须是 created_at / request_body", name)
 	return cols
 }
 

@@ -131,8 +131,8 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 	})
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 
-	// 上游布局里 upstream_request_id 是倒数第 4 个；fork 的尾参把它再往前推。
-	idx := len(prepared.args) - 4 - usageLogForkTailArgCount
+	// 上游布局里 upstream_request_id 是倒数第 6 个；fork 的尾参把它再往前推。
+	idx := len(prepared.args) - 6 - usageLogForkTailArgCount
 	arg, ok := prepared.args[idx].(sql.NullString)
 	require.True(t, ok, "upstream_request_id arg should be sql.NullString, got %T", prepared.args[idx])
 	require.True(t, arg.Valid)

@@ -85,6 +85,8 @@ var usageLogInsertArgTypes = [...]string{
 	"text",        // upstream_request_id
 	"text",        // session_id
 	"boolean",     // native_compaction_v2
+	"integer",     // cache_creation_30m_tokens
+	"integer",     // cache_creation_12h_tokens
 	"timestamptz", // created_at
 	"text",        // fork: request_body（仅写分区子表，不入主表列）
 }
@@ -224,7 +226,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 		return false, service.MarkUsageLogCreateNotPersisted(ctx.Err())
 	}
 
-	// fork: request_body（$63）拆在分区子表 usage_log_request_bodies；主表 INSERT 不含它，
+	// fork: request_body（$65）拆在分区子表 usage_log_request_bodies；主表 INSERT 不含它，
 	// 仅对真正插入主表的行写子表（空 request_id / 空 body 天然跳过）。
 	query := `
 		WITH ins AS (
@@ -290,6 +292,8 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 				upstream_request_id,
 				session_id,
 				native_compaction_v2,
+				cache_creation_30m_tokens,
+				cache_creation_12h_tokens,
 				created_at
 			) VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8, $9,
@@ -297,15 +301,15 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 				$12, $13, $14, $15,
 				$16, $17, $18, $19,
 				$20, $21, $22, $23, $24, $25,
-				$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62
+				$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64
 			)
 			ON CONFLICT (request_id, api_key_id) DO NOTHING
 			RETURNING id, created_at, request_id, api_key_id
 		), body_ins AS (
 			INSERT INTO usage_log_request_bodies (request_id, api_key_id, created_at, request_body)
-			SELECT ins.request_id, ins.api_key_id, ins.created_at, $63::text
+			SELECT ins.request_id, ins.api_key_id, ins.created_at, $65::text
 			FROM ins
-			WHERE ins.request_id IS NOT NULL AND $63::text IS NOT NULL
+			WHERE ins.request_id IS NOT NULL AND $65::text IS NOT NULL
 			ON CONFLICT (request_id, api_key_id, created_at) DO NOTHING
 		)
 		SELECT id, created_at FROM ins
@@ -758,13 +762,15 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
+			cache_creation_30m_tokens,
+			cache_creation_12h_tokens,
 			created_at,
 			request_body
 		) AS (VALUES `)
 
-	// Each batch row prepends the synthetic input_index before the 61
+	// Each batch row prepends the synthetic input_index before the 64
 	// usage-log column values, plus the fork-only request_body tail value.
-	args := make([]any, 0, len(keys)*63)
+	args := make([]any, 0, len(keys)*66)
 	argPos := 1
 	for idx, key := range keys {
 		if idx > 0 {
@@ -854,6 +860,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				upstream_request_id,
 				session_id,
 				native_compaction_v2,
+				cache_creation_30m_tokens,
+				cache_creation_12h_tokens,
 				created_at
 			)
 			SELECT
@@ -918,6 +926,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				upstream_request_id,
 				session_id,
 				native_compaction_v2,
+				cache_creation_30m_tokens,
+				cache_creation_12h_tokens,
 				created_at
 			FROM input
 			ON CONFLICT (request_id, api_key_id) DO NOTHING
@@ -1032,6 +1042,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
+			cache_creation_30m_tokens,
+			cache_creation_12h_tokens,
 			created_at,
 			request_body
 		) AS (VALUES `)
@@ -1124,6 +1136,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
+			cache_creation_30m_tokens,
+			cache_creation_12h_tokens,
 			created_at
 		)
 		SELECT
@@ -1188,6 +1202,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
+			cache_creation_30m_tokens,
+			cache_creation_12h_tokens,
 			created_at
 		FROM input
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
@@ -1271,6 +1287,8 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
+			cache_creation_30m_tokens,
+			cache_creation_12h_tokens,
 			created_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
@@ -1278,15 +1296,15 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			$12, $13, $14, $15,
 			$16, $17, $18, $19,
 			$20, $21, $22, $23, $24, $25,
-			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62
+			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING request_id, api_key_id, created_at
 		)
 		INSERT INTO usage_log_request_bodies (request_id, api_key_id, created_at, request_body)
-		SELECT ins.request_id, ins.api_key_id, ins.created_at, $63::text
+		SELECT ins.request_id, ins.api_key_id, ins.created_at, $65::text
 		FROM ins
-		WHERE ins.request_id IS NOT NULL AND $63::text IS NOT NULL
+		WHERE ins.request_id IS NOT NULL AND $65::text IS NOT NULL
 		ON CONFLICT (request_id, api_key_id, created_at) DO NOTHING
 	`, prepared.args...)
 	return err
@@ -1410,8 +1428,10 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			upstreamRequestID,    // upstream_request_id
 			sessionID,            // session_id
 			log.NativeCompactionV2,
+			log.CacheCreation30mTokens,
+			log.CacheCreation12hTokens,
 			createdAt,
-			// fork: request_body（$63）不入主表列，仅供 CTE 写分区子表 usage_log_request_bodies
+			// fork: request_body（$65）不入主表列，仅供 CTE 写分区子表 usage_log_request_bodies
 			requestBody,
 		},
 	}

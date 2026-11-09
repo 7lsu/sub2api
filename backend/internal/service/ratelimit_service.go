@@ -373,8 +373,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	// otherwise a broad "rate limit" keyword rule can shorten a multi-hour
 	// cooldown to a local temporary pause.
 	if statusCode == http.StatusTooManyRequests && account.Platform == PlatformAnthropic {
-		// Rejected responses carry the latest usage too. Save it before any
-		// window handler returns, including when an existing cooldown is kept.
+		// 429 也携带最新用量；在窗口限流分支提前返回前保留耗尽时的周额度。
 		s.samplePassiveUsageFromHeaders(ctx, account, headers)
 		// Fable may be rejected because the organization has no usage credits for
 		// this model. Anthropic reports that as 429, but it is a model entitlement
@@ -2055,12 +2054,11 @@ func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
 	slog.Info("account_overloaded", "account_id", account.ID, "until", until)
 }
 
-// UpdateSessionWindow 从成功响应更新额度采样及可用的 5h 窗口状态。
+// UpdateSessionWindow 从成功响应更新5h窗口状态并采样可用的额度窗口。
 func (s *RateLimitService) UpdateSessionWindow(ctx context.Context, account *Account, headers http.Header) {
 	status := headers.Get("anthropic-ratelimit-unified-5h-status")
 	if status == "" {
-		// Verified Ultra accounts can omit the 5h window entirely. Weekly
-		// usage is independent and must still refresh without that header.
+		// Ultra 等账号可能仅返回周窗口；不能因缺少 5h 状态而丢弃真实的 7d 用量。
 		s.samplePassiveUsageFromHeaders(ctx, account, headers)
 		return
 	}
